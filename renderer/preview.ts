@@ -21,6 +21,7 @@ export function createPreviewBridge(): PupaBridge {
   const emit = () => { state = structuredClone(state); for (const fn of listeners) fn(state); return { ok: true }; };
   return {
     getState: async () => structuredClone(state),
+    requestSystemShortcut: async () => ({ ok: false, error: 'ブラウザプレビューではシステムのショートカットを設定できません。' }),
     // Preview intentionally does not claim to access the system clipboard.
     copyEntry: async (id) => {
       if (!state.entries.some((entry) => entry.id === id) || pendingDismissal) return { ok: false };

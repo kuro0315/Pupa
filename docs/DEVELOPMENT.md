@@ -10,7 +10,7 @@ Pupa 0.2 は **Tauri 2 + Rust + TypeScript / Vite** です。Electron、Node.js 
 - 対応する GUI セッション。Web プレビューだけでは OS 機能を確認できません。
 
 ```sh
-git clone --branch feat/pupa-clipboard-cards https://github.com/kuro0315/Pupa.git
+git clone https://github.com/kuro0315/Pupa.git
 cd Pupa
 npm ci
 npm start
@@ -31,6 +31,8 @@ npm run test:ui
 `npm test` は Rust の純粋コアテストと、限定コマンドの bridge / 状態順序のテストです。実際の OS のクリップボードや、ユーザーのウィンドウ情報は読みません。GUI 依存のないコア検証と、実際の WebView / OS での確認を分けています。
 
 Linux ネイティブ smoke は CI の隔離された Xvfb / D-Bus セッションで Tauri + WebKitWebDriver を使います。テスト専用にコンパイルしたバイナリと合成値だけを使用し、配布物にはテストコマンドを含めません。実 OS クリップボード API の試験も、自分で書いた合成値だけを読みます。普段使いのデスクトップでは実行しないでください。
+
+Wayland のショートカットは、隔離 D-Bus 上の模擬 GlobalShortcuts portal とネイティブ Tauri の間でも検証します。これはポータル通信・状態・シグナルの統合テストであり、実 GNOME の許可画面やネイティブ Wayland の Chrome に対する動作証明ではありません。実ユーザーのセッションバスや許可ストアをテストに使用しません。
 
 ## パッケージ
 

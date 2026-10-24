@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Pupa
+Comment=Local-first clipboard manager
+Exec=pupa
+Icon=pupa
+Terminal=false
+Categories=Utility;
+# Tauri also ships the visible Pupa.desktop launcher. This identity entry lets
+# the portal resolve our stable reverse-DNS ID without duplicating the launcher.
+NoDisplay=true

@@ -1,6 +1,6 @@
 [package]
 name = "pupa"
-version = "0.2.2"
+version = "0.2.3"
 description = "Private, local clipboard cards"
 authors = ["Pupa contributors"]
 license = "MIT"
@@ -18,7 +18,9 @@ required-features = ["desktop"]
 
 [features]
 default = ["desktop"]
-desktop = ["dep:raw-window-handle", "dep:tauri", "dep:tauri-build", "dep:tauri-plugin-clipboard-manager", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-single-instance"]
+desktop = ["dep:raw-window-handle", "dep:tauri", "dep:tauri-build", "dep:tauri-plugin-clipboard-manager", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-single-instance", "portal", "dep:gtk"]
+# The portal adapter can be checked/tested without linking GTK or launching a desktop.
+portal = ["dep:ashpd", "dep:tokio", "dep:futures-util"]
 # Explicit synthetic-only native test binary. Never included in distribution builds.
 smoke-test = ["desktop"]
 
@@ -39,3 +41,9 @@ tauri-plugin-global-shortcut = { version = "2", optional = true }
 tauri-plugin-single-instance = { version = "2", optional = true }
 
 raw-window-handle = { version = "0.6", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "=0.13.13", default-features = false, features = ["tokio", "global_shortcuts"], optional = true }
+tokio = { version = "1", features = ["sync", "time", "macros", "rt"], optional = true }
+futures-util = { version = "0.3", optional = true }
+gtk = { version = "0.18", optional = true }

@@ -25,12 +25,13 @@ app.innerHTML = `
   </main>
   <dialog id="settings-dialog" class="pupa-dialog settings-dialog" aria-labelledby="settings-title" data-testid="settings-dialog">
     <form id="settings-form"><div class="dialog-heading"><div><h2 id="settings-title">設定</h2></div><button class="icon-button" type="button" data-close-dialog="settings-dialog" aria-label="設定を閉じる">${icon('close')}</button></div>
-      <div id="settings-status" aria-live="polite"></div><div class="setting-row"><div><span class="setting-label">クリップボードの記録</span></div><button type="button" class="soft-button" id="pause-button">一時停止</button></div><div class="setting-group"><label class="setting-label" for="shortcut-input">呼び出すショートカット</label><div class="shortcut-field"><input id="shortcut-input" name="shortcut" spellcheck="false" autocomplete="off" required aria-describedby="shortcut-help"><button type="button" class="soft-button" id="record-shortcut">キーを記録</button></div><p class="field-help" id="shortcut-help">例: CommandOrControl+Shift+Space</p></div>
+      <div id="settings-status" aria-live="polite"></div><div class="setting-row"><div><span class="setting-label">クリップボードの記録</span></div><button type="button" class="soft-button" id="pause-button">一時停止</button></div><div class="setting-group" id="native-shortcut-controls"><label class="setting-label" for="shortcut-input">呼び出すショートカット</label><div class="shortcut-field"><input id="shortcut-input" name="shortcut" spellcheck="false" autocomplete="off" required aria-describedby="shortcut-help"><button type="button" class="soft-button" id="record-shortcut">キーを記録</button></div><p class="field-help" id="shortcut-help">例: CommandOrControl+Shift+Space</p></div>
+      <div class="setting-group" id="system-shortcut-controls" hidden><span class="setting-label" id="system-shortcut-label">システムのショートカット</span><p class="setting-description" id="system-shortcut-status" role="status" aria-live="polite"></p><p class="setting-description" id="system-shortcut-current" hidden>現在のキー: <output id="system-shortcut-trigger"></output></p><button type="button" class="soft-button" id="system-shortcut-button" data-testid="system-shortcut-button" aria-describedby="system-shortcut-status system-shortcut-help">システムショートカットを有効にする</button><p class="field-help" id="system-shortcut-help">OSの確認画面が開きます。許可やキーの選択は、その画面で行ってください。</p><p class="form-error" id="system-shortcut-error" role="alert" hidden></p></div>
       <div class="setting-row"><div><label class="setting-label" for="history-limit">覚えておく枚数</label><p class="setting-description">ピン留めした手札も含めた上限です。</p></div><select id="history-limit" name="historyLimit"><option value="30">30 枚</option><option value="60">60 枚</option><option value="100">100 枚</option></select></div>
       <div class="history-reduction-warning" id="history-reduction-warning" hidden><p id="history-reduction-description"></p><label><input id="confirm-history-reduction" data-testid="confirm-history-reduction" type="checkbox">削除される可能性を確認しました</label></div>
       <div class="setting-row fan-setting"><div class="slider-heading"><label class="setting-label" for="fan-spread">カードの開く角度</label><output id="fan-spread-value" for="fan-spread">72°</output></div><input id="fan-spread" data-testid="fan-spread-setting" type="range" min="20" max="84" step="1" value="72"><div class="slider-labels"><span>せまく</span><span>広く</span></div></div>
       <div class="setting-row fan-setting"><div class="slider-heading"><label class="setting-label" for="fan-distance">画面の端からの距離</label><output id="fan-distance-value" for="fan-distance">0 px</output></div><input id="fan-distance" data-testid="fan-distance-setting" type="range" min="0" max="90" step="1" value="0"><div class="slider-labels"><span>近く</span><span>遠く</span></div><p class="setting-description">画面に収まる範囲に調整されます。</p></div>
-      <label class="setting-row toggle-row"><span><span class="setting-label">収集時のアプリを記録（推定）</span><span class="setting-description">アプリ名とローカルのアイコンのみ。ウィンドウ名やURLは記録しません。</span></span><input class="switch" id="source-app" data-testid="source-app-setting" type="checkbox" name="sourceApp"><span class="toggle-track" aria-hidden="true"></span></label>
+      <label class="setting-row toggle-row"><span><span class="setting-label">収集時のアプリを記録（推定）</span><span class="setting-description" id="source-app-description">アプリ名とローカルのアイコンのみ。ウィンドウ名やURLは記録しません。</span><span class="setting-description" id="source-app-platform-note" hidden>Waylandセッションでのコピー元アプリ名・アイコンの取得は未対応です。オンにしても新しい履歴は「アプリ不明」になります。</span></span><input class="switch" id="source-app" data-testid="source-app-setting" type="checkbox" name="sourceApp" aria-describedby="source-app-description source-app-platform-note"><span class="toggle-track" aria-hidden="true"></span></label>
       <label class="setting-row toggle-row persistence-row"><span><span class="setting-label">次に開くときも、履歴を残す</span><span class="setting-description">オフなら、アプリ終了時に履歴が消えます。</span></span><input class="switch" id="persistence" type="checkbox" name="persistence" aria-describedby="persistence-warning"><span class="toggle-track" aria-hidden="true"></span></label>
       <p class="privacy-warning" id="persistence-warning">${icon('lock')}<span>オンにすると、コピーした内容を暗号化せずにこの端末へ保存します。パスワードなど、大切な情報の保存にはご注意ください。Pupaから外部への送信はしません。</span></p>
       <p class="platform-note" id="platform-note" hidden></p><p class="form-error" id="settings-error" role="alert" hidden></p>
@@ -66,6 +67,7 @@ let dismissTimer: ReturnType<typeof setTimeout> | undefined;
 let copiedId: string | null = null;
 let animateNext = true;
 let recording = false;
+let systemShortcutRequestPending = false;
 let lastFocus: HTMLElement | null = null;
 let wheelTime = 0;
 let draftFan: { fanSpread: number; fanDistance: number } | null = null;
@@ -384,11 +386,42 @@ function renderCards() {
   hoverId = shownEntries.some((entry) => entry.id === retainedHoverId) ? retainedHoverId : null;
   updateExpansion();
 }
+function usesSystemShortcut() { return state?.status.shortcutBackend === 'portal'; }
+function renderShortcutSettings() {
+  if (!state) return;
+  const portal = usesSystemShortcut();
+  $('#native-shortcut-controls').hidden = portal;
+  $('#system-shortcut-controls').hidden = !portal;
+  $<HTMLInputElement>('#shortcut-input').disabled = portal;
+  $<HTMLButtonElement>('#record-shortcut').disabled = portal;
+  if (portal && recording) stopRecording();
+  $('#source-app-platform-note').hidden = !(state.status.platform === 'linux' && state.status.wayland);
+  if (!portal) return;
+  const current = state.status.shortcutState ?? (state.status.shortcutRegistered ? 'registered' : 'needs-approval');
+  const busy = systemShortcutRequestPending || current === 'requesting';
+  const descriptions = {
+    'needs-approval': 'システムの確認画面でショートカットを許可してください。',
+    requesting: 'システムの設定・確認画面での操作を待っています。',
+    registered: 'ショートカットはシステムに登録されています。',
+    cancelled: '許可されなかったか、設定がキャンセルされました。もう一度試せます。',
+    unavailable: 'この環境ではシステムのショートカット機能を利用できません。トレイメニューまたはランチャーから開いてください。',
+    closed: 'システムとのショートカット接続が終了しました。もう一度接続してください。',
+    error: 'システムのショートカットを設定できませんでした。もう一度試せます。',
+  };
+  $('#system-shortcut-status').textContent = current === 'requesting' ? descriptions.requesting : state.status.shortcutWarning || (busy && current === 'needs-approval' ? descriptions.requesting : descriptions[current]);
+  const registered = current === 'registered' && state.status.shortcutRegistered;
+  $('#system-shortcut-current').hidden = !registered;
+  $('#system-shortcut-trigger').textContent = registered ? state.status.shortcutTrigger || 'OSからキー表示は提供されていません' : '';
+  const button = $<HTMLButtonElement>('#system-shortcut-button');
+  button.disabled = busy; button.setAttribute('aria-busy', String(busy));
+  button.textContent = busy ? 'システム画面で設定中…' : registered ? 'システム設定で変更' : current === 'needs-approval' ? 'システムショートカットを有効にする' : current === 'closed' ? 'システムに再接続' : 'もう一度設定する';
+}
 function renderSettingsStatus() {
   if (!state) return;
+  renderShortcutSettings();
   const status = $('#settings-status'); status.replaceChildren();
-  if (state.status.shortcutAvailable === false) status.append(make('p', 'form-error', 'この環境ではグローバルショートカットを利用できません。トレイメニューまたはアプリのランチャーからPupaを開いてください。'));
-  else if (!state.status.shortcutRegistered) status.append(make('p', 'form-error', 'ショートカットを登録できませんでした。別のキーをお試しください。'));
+  if (!usesSystemShortcut() && state.status.shortcutAvailable === false) status.append(make('p', 'form-error', 'この環境ではグローバルショートカットを利用できません。トレイメニューまたはアプリのランチャーからPupaを開いてください。'));
+  else if (!usesSystemShortcut() && !state.status.shortcutRegistered) status.append(make('p', 'form-error', 'ショートカットを登録できませんでした。別のキーをお試しください。'));
   if (state.status.storageWarning) status.append(make('p', 'form-error', state.status.storageWarning));
   if (state.status.positionWarning) status.append(make('p', 'form-error', state.status.positionWarning));
   $('#pause-button').textContent = state.paused ? '記録を再開' : '一時停止';
@@ -416,9 +449,9 @@ function openSettings() {
   $<HTMLInputElement>('#fan-spread').value = String(state.settings.fanSpread ?? 72);
   $<HTMLInputElement>('#fan-distance').value = String(state.settings.fanDistance ?? 0);
   reductionScope = ''; updateHistoryWarning(); updateFanDraft();
-  $('#settings-error').hidden = true;
+  $('#settings-error').hidden = true; $('#system-shortcut-error').hidden = true;
   $('#platform-note').hidden = !state.status.wayland;
-  $('#platform-note').textContent = 'Waylandではデスクトップ環境により、ショートカットやクリップボードの取得に制約があります。トレイメニューからも開けます。';
+  $('#platform-note').textContent = usesSystemShortcut() ? 'ショートカットはOSが管理します。確認画面で許可・キー設定を行ってください。' : 'Waylandでは環境によりグローバルショートカットを利用できません。トレイメニューまたはランチャーから開けます。';
   $('#version-label').textContent = `Pupa ${state.status.version}${preview ? ' · UI preview' : ''}`;
   renderSettingsStatus(); stopRecording(); openDialog(settingsDialog);
 }
@@ -507,7 +540,27 @@ document.querySelectorAll<HTMLButtonElement>('[data-close-dialog]').forEach((but
   });
   dialog.addEventListener('click', (event) => { if (event.target !== dialog) return; const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeDialog(dialog); });
 });
-$('#record-shortcut').addEventListener('click', () => { if (recording) { stopRecording(); return; } recording = true; $('#record-shortcut').textContent = '記録をやめる'; $('#record-shortcut').classList.add('recording'); $('#shortcut-help').textContent = 'Ctrl / ⌘ / Alt と一緒に、使いたいキーを押してください。Escで中止。'; });
+$('#system-shortcut-button').addEventListener('click', async (event) => {
+  event.preventDefault(); event.stopPropagation();
+  if (!usesSystemShortcut() || systemShortcutRequestPending || state?.status.shortcutState === 'requesting') return;
+  systemShortcutRequestPending = true;
+  const error = $('#system-shortcut-error'); error.hidden = true; renderShortcutSettings();
+  try {
+    // Only this explicit settings button opens the OS flow. Result.ok is not
+    // permission or registration: authoritative state and trigger come back
+    // through pupa-state/getState, including later ShortcutsChanged events.
+    const result = await bridge.requestSystemShortcut();
+    applyState(await bridge.getState());
+    if (!result.ok && !state?.status.shortcutWarning) {
+      error.textContent = result.error || 'システム設定を開けませんでした。もう一度お試しください。'; error.hidden = false;
+    }
+  } catch {
+    error.textContent = 'システム設定を開けませんでした。アプリとの接続を確認して、もう一度お試しください。'; error.hidden = false;
+  } finally {
+    systemShortcutRequestPending = false; renderSettingsStatus();
+  }
+});
+$('#record-shortcut').addEventListener('click', () => { if (usesSystemShortcut()) return; if (recording) { stopRecording(); return; } recording = true; $('#record-shortcut').textContent = '記録をやめる'; $('#record-shortcut').classList.add('recording'); $('#shortcut-help').textContent = 'Ctrl / ⌘ / Alt と一緒に、使いたいキーを押してください。Escで中止。'; });
 $('#fan-spread').addEventListener('input', updateFanDraft);
 $('#fan-distance').addEventListener('input', updateFanDraft);
 $('#history-limit').addEventListener('change', updateHistoryWarning);
@@ -516,7 +569,7 @@ $('#settings-form').addEventListener('submit', async (event) => {
   if (!$('#history-reduction-warning').hidden && !$<HTMLInputElement>('#confirm-history-reduction').checked) { $<HTMLInputElement>('#confirm-history-reduction').focus(); return; }
   const save = $<HTMLButtonElement>('#save-settings'); const error = $('#settings-error'); save.disabled = true; error.hidden = true;
   try {
-    const result = await bridge.updateSettings({ shortcut: $<HTMLInputElement>('#shortcut-input').value.trim(), historyLimit: Number($<HTMLSelectElement>('#history-limit').value), persistence: $<HTMLInputElement>('#persistence').checked, sourceApp: $<HTMLInputElement>('#source-app').checked, fanSpread: Number($<HTMLInputElement>('#fan-spread').value), fanDistance: Number($<HTMLInputElement>('#fan-distance').value), ...(!$('#history-reduction-warning').hidden && $<HTMLInputElement>('#confirm-history-reduction').checked ? { confirmHistoryReduction: true } : {}) });
+    const result = await bridge.updateSettings({ ...(!usesSystemShortcut() ? { shortcut: $<HTMLInputElement>('#shortcut-input').value.trim() } : {}), historyLimit: Number($<HTMLSelectElement>('#history-limit').value), persistence: $<HTMLInputElement>('#persistence').checked, sourceApp: $<HTMLInputElement>('#source-app').checked, fanSpread: Number($<HTMLInputElement>('#fan-spread').value), fanDistance: Number($<HTMLInputElement>('#fan-distance').value), ...(!$('#history-reduction-warning').hidden && $<HTMLInputElement>('#confirm-history-reduction').checked ? { confirmHistoryReduction: true } : {}) });
     if (!result.ok) { error.textContent = result.error || '設定を保存できませんでした。'; error.hidden = false; }
     else { closeDialog(settingsDialog); showToast('設定を保存しました'); }
   } catch { error.textContent = '設定を保存できませんでした。アプリとの接続を確認してください。'; error.hidden = false; }

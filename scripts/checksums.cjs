@@ -5,6 +5,7 @@ const { createReadStream } = require('node:fs');
 const { readdir, writeFile, stat, mkdir, copyFile } = require('node:fs/promises');
 const { resolve, join, basename, extname } = require('node:path');
 const { version } = require('../package.json');
+const { verifyDebIdentity } = require('./linux-identity.cjs');
 
 function installerName(file) {
   const extension = extname(file);
@@ -40,6 +41,7 @@ async function main() {
   await mkdir(output, { recursive: true });
   const manifest = { commit: process.env.GITHUB_SHA || null, version, target: process.env.PUPA_BUILD_TARGET || null, platform: process.platform, arch: process.arch, files: [] };
   for (const file of files) {
+    if (file.endsWith('.deb')) console.log(`Verified portal desktop identity: ${verifyDebIdentity(file)}`);
     const name = installerName(file);
     if (manifest.files.some(item => item.name === name)) throw new Error(`Duplicate installer name: ${name}`);
     const destination = join(output, name);

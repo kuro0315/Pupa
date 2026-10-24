@@ -111,3 +111,34 @@ test('failed and stale no-token copy results remain unchanged without implicit d
     { command: 'copy_entry', args: { id: 'stale' } },
   ]);
 });
+
+test('system shortcut request is explicit and has no implicit startup or approval side effect', async () => {
+  const calls = [];
+  mockIPC((command, args) => { calls.push({ command, args }); return command === 'get_state' ? { entries: [], status: { shortcutBackend: 'portal', shortcutState: 'needs-approval' } } : { ok: true }; });
+  const bridge = createTauriBridge();
+  await bridge.getState();
+  assert.deepEqual(calls, [{ command: 'get_state', args: {} }]);
+  assert.deepEqual(await bridge.requestSystemShortcut(), { ok: true });
+  assert.deepEqual(calls.at(-1), { command: 'request_system_shortcut', args: {} });
+  assert.equal(calls.length, 2, 'request does not accept a permission, alter settings, or hide the app');
+});
+
+test('system shortcut cancellation and unavailable results pass through unchanged', async () => {
+  const results = [{ ok: false, error: '許可されなかったか、キャンセルされました' }, { ok: false, error: 'GlobalShortcuts unavailable' }];
+  const calls = [];
+  mockIPC((command, args) => { calls.push({ command, args }); return results.shift(); });
+  const bridge = createTauriBridge();
+  assert.deepEqual(await bridge.requestSystemShortcut(), { ok: false, error: '許可されなかったか、キャンセルされました' });
+  assert.deepEqual(await bridge.requestSystemShortcut(), { ok: false, error: 'GlobalShortcuts unavailable' });
+  assert.deepEqual(calls.map(call => call.command), ['request_system_shortcut', 'request_system_shortcut']);
+});
+
+test('portal binding changes and session closure are authoritative ordinary state events', async () => {
+  mockIPC(() => ({ entries: [] }), { shouldMockEvents: true });
+  const bridge = createTauriBridge(); const statuses = [];
+  const off = bridge.onState(state => statuses.push(state.status)); await bridge.getState();
+  const registered = { shortcutBackend: 'portal', shortcutState: 'registered', shortcutRegistered: true, shortcutTrigger: 'Super+P', shortcutWarning: null };
+  const closed = { shortcutBackend: 'portal', shortcutState: 'closed', shortcutRegistered: false, shortcutTrigger: null, shortcutWarning: 'Session closed' };
+  await emit('pupa-state', { status: registered }); await emit('pupa-state', { status: closed });
+  assert.deepEqual(statuses, [registered, closed]); off();
+});

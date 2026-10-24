@@ -1,6 +1,7 @@
 pub mod geometry;
 pub mod history;
 pub mod power;
+pub mod shortcuts;
 pub mod source_app;
 pub mod storage;
 #[cfg(feature = "desktop")]
@@ -37,6 +38,10 @@ mod desktop {
     struct Status {
         shortcut_registered: bool,
         shortcut_available: bool,
+        shortcut_backend: &'static str,
+        shortcut_state: &'static str,
+        shortcut_trigger: Option<String>,
+        shortcut_warning: Option<String>,
         storage_warning: Option<String>,
         position_warning: Option<String>,
         platform: &'static str,
@@ -110,6 +115,9 @@ mod desktop {
         status: Status,
         settings_busy: bool,
         source_busy: bool,
+        portal_dialog_open: bool,
+        portal_focus_deadline: Option<Instant>,
+        portal_request_busy: bool,
         visible: bool,
         shown_at: Instant,
         blur_generation: u64,
@@ -546,6 +554,8 @@ mod desktop {
         if let Some(backend) = app.try_state::<Backend>() {
             let mut core = backend.core();
             core.visible = false;
+            core.portal_dialog_open = false;
+            core.portal_focus_deadline = None;
             core.placement.generation = core.placement.generation.wrapping_add(1);
             core.placement.scheduled = false;
             core.placement.ready = false;
@@ -610,6 +620,147 @@ mod desktop {
         // GlobalShortcutExt::global_shortcut would panic without its state.
         app.try_state::<GlobalShortcut<tauri::Wry>>()
     }
+    #[cfg(target_os = "linux")]
+    fn setup_portal_shortcut(app: &AppHandle) {
+        use crate::shortcuts::portal::{Controller, Event};
+        let handle = app.clone();
+        let (controller, worker) = Controller::new(move |event| {
+            let backend = handle.state::<Backend>();
+            if backend.core().lifecycle.quitting {
+                return;
+            }
+            match event {
+                Event::Status(status) => {
+                    {
+                        let mut core = backend.core();
+                        core.status.shortcut_registered = status.registered();
+                        core.status.shortcut_available = status.state != "unavailable";
+                        core.status.shortcut_state = status.state;
+                        core.status.shortcut_trigger = status.trigger;
+                        core.status.shortcut_warning = status.warning;
+                    }
+                    publish(&handle);
+                }
+                Event::RestorePreference(enabled) => {
+                    let mut core = backend.core();
+                    // Persist opt-in only after a successful, usable portal binding.
+                    let mut settings = core.settings.clone();
+                    settings.system_shortcut_enabled = enabled;
+                    if core.settings.system_shortcut_enabled == enabled {
+                        return;
+                    }
+                    if backend.storage.save_settings(&settings).is_ok() {
+                        core.settings = settings;
+                    } else {
+                        core.status.storage_warning =
+                            Some("ショートカットの次回起動用の設定を保存できませんでした。".into());
+                    }
+                    drop(core);
+                    publish(&handle);
+                }
+                Event::Activated(token) => {
+                    let ui = handle.clone();
+                    let _ = handle.run_on_main_thread(move || {
+                        if ui.state::<Backend>().core().visible {
+                            hide_now(&ui);
+                        } else {
+                            if let (Some(token), Some(window)) =
+                                (token, ui.get_webview_window("main"))
+                            {
+                                // GTK consumes the compositor-provided activation token;
+                                // do not set a process-global environment variable.
+                                use gtk::prelude::GtkWindowExt;
+                                if let Ok(window) = window.gtk_window() {
+                                    window.set_startup_id(&token);
+                                }
+                            }
+                            show_now(&ui);
+                        }
+                    });
+                }
+            }
+        });
+        app.manage(controller.clone());
+        tauri::async_runtime::spawn(worker);
+        let restore = {
+            let backend = app.state::<Backend>();
+            let core = backend.core();
+            core.settings
+                .system_shortcut_enabled
+                .then(|| core.settings.shortcut.clone())
+        };
+        if let Some(preferred) = restore {
+            // A previously successful opt-in authorizes normal portal restoration.
+            // GNOME may ask again if its saved grant was revoked. Never accept it.
+            tauri::async_runtime::spawn(async move {
+                let _ = controller.request(preferred, None, true).await;
+            });
+        }
+    }
+    #[tauri::command]
+    async fn request_system_shortcut(app: AppHandle, window: WebviewWindow) -> ActionResult {
+        if let Err(error) = authorize(&app, &window) {
+            return ActionResult::from(Err(error));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            let preferred = {
+                let backend = app.state::<Backend>();
+                let core = backend.core();
+                if core.status.shortcut_backend != "portal" || core.lifecycle.quitting {
+                    return ActionResult::from(Err(
+                        "この環境では通常のショートカット設定を使ってください。".into(),
+                    ));
+                }
+                core.settings.shortcut.clone()
+            };
+            let parent = match window.window_handle().map(|handle| handle.as_raw()) {
+                Ok(RawWindowHandle::Xlib(handle)) => Some(handle.window as u64),
+                Ok(RawWindowHandle::Xcb(handle)) => Some(handle.window.get() as u64),
+                // A missing parent is explicitly supported by the portal. Never
+                // reinterpret a Wayland surface pointer as an X11 window id.
+                _ => None,
+            };
+            let Some(controller) = app.try_state::<crate::shortcuts::portal::Controller>() else {
+                return ActionResult::from(Err(crate::shortcuts::CLOSED.into()));
+            };
+            {
+                let backend = app.state::<Backend>();
+                let mut core = backend.core();
+                if core.portal_request_busy {
+                    return ActionResult::from(Err(
+                        "システムのショートカット設定を待っています。".into()
+                    ));
+                }
+                core.portal_request_busy = true;
+            }
+            let result = controller.request(preferred, parent, false).await;
+            {
+                let backend = app.state::<Backend>();
+                let mut core = backend.core();
+                core.portal_request_busy = false;
+                if matches!(
+                    result,
+                    Ok(crate::shortcuts::portal::RequestOutcome::ConfigurationOpened)
+                ) {
+                    // Configure returns before focus transfers. Allow one delayed
+                    // handoff, then retain the parent until focus comes back.
+                    if !core.portal_dialog_open {
+                        core.portal_focus_deadline = Some(Instant::now() + Duration::from_secs(5));
+                    }
+                } else {
+                    core.portal_dialog_open = false;
+                    core.portal_focus_deadline = None;
+                }
+            }
+            ActionResult::from(result.map(|_| ()))
+        }
+        #[cfg(not(target_os = "linux"))]
+        ActionResult::from(Err(
+            "この環境では通常のショートカット設定を使ってください。".into(),
+        ))
+    }
     fn finish(app: &AppHandle) {
         if let Some(backend) = app.try_state::<Backend>() {
             let mut core = backend.core();
@@ -619,6 +770,16 @@ mod desktop {
         }
         if let Some(manager) = shortcut_manager(app) {
             let _ = manager.unregister_all();
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(controller) = app.try_state::<crate::shortcuts::portal::Controller>() {
+            let controller = controller.inner().clone();
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                controller.shutdown_and_wait().await;
+                app.exit(0);
+            });
+            return;
         }
         app.exit(0);
     }
@@ -951,11 +1112,22 @@ mod desktop {
             let object = patch
                 .as_object_mut()
                 .ok_or("設定の形式が正しくありません。")?;
+            // Portal opt-in is set only after successful system approval, never
+            // by an arbitrary renderer settings patch.
+            if object.contains_key("systemShortcutEnabled") {
+                return Err(
+                    "システムショートカットは専用の設定ボタンから変更してください。".into(),
+                );
+            }
             let confirmed = object
                 .remove("confirmHistoryReduction")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let next = previous.patched(&patch)?;
+            let mut next = previous.patched(&patch)?;
+            let portal = backend.core().status.shortcut_backend == "portal";
+            if portal && previous.shortcut != next.shortcut {
+                return Err("Wayland のショートカットはシステム設定で変更してください。".into());
+            }
             {
                 let core = backend.core();
                 if next.history_limit < core.history.entries.len() && !confirmed {
@@ -970,7 +1142,7 @@ mod desktop {
                 .shortcut
                 .parse::<Shortcut>()
                 .map_err(|_| SHORTCUT_ERROR)?;
-            let changed = old_shortcut != new_shortcut;
+            let changed = !portal && old_shortcut != new_shortcut;
             if changed {
                 shortcut_manager(&app)
                     .ok_or(SHORTCUT_ERROR)?
@@ -982,6 +1154,8 @@ mod desktop {
                 let mut core = backend.core();
                 // Capture may have added another entry while the OS registered the
                 // shortcut. Recheck destructive reduction under the commit lock.
+                // A portal request can also finish while settings are being saved.
+                next.system_shortcut_enabled = core.settings.system_shortcut_enabled;
                 if next.history_limit < core.history.entries.len() && !confirmed {
                     return Err("履歴の上限を減らすと古い履歴が削除されます。ピン留めも削除対象になる場合があります。確認してから保存してください。".into());
                 }
@@ -1012,6 +1186,8 @@ mod desktop {
                 core.status.storage_warning = None;
                 if changed {
                     core.status.shortcut_registered = true;
+                    core.status.shortcut_state = "registered";
+                    core.status.shortcut_trigger = Some(core.settings.shortcut.clone());
                 }
                 backend.persist(&mut core);
             }
@@ -1200,9 +1376,9 @@ mod desktop {
                 match event {
                     WindowEvent::CloseRequested{api,..}=>{if !backend.core().lifecycle.quitting{api.prevent_close();hide_window(app);}},
                     WindowEvent::Focused(focused)=>{
-                        let (generation,wait)={let mut core=backend.core();core.blur_generation=core.blur_generation.wrapping_add(1);(core.blur_generation,Duration::from_millis(300).saturating_sub(core.shown_at.elapsed()))};
+                        let (generation,wait)={let mut core=backend.core();core.blur_generation=core.blur_generation.wrapping_add(1);if *focused {core.portal_dialog_open=false;core.portal_focus_deadline=None;}else if core.portal_request_busy||core.portal_focus_deadline.is_some_and(|deadline|Instant::now()<deadline){core.portal_dialog_open=true;core.portal_focus_deadline=None;}(core.blur_generation,Duration::from_millis(300).saturating_sub(core.shown_at.elapsed()))};
                         if !focused {let handle=app.clone();thread::spawn(move||{thread::sleep(wait);let ui=handle.clone();let _=handle.run_on_main_thread(move||{
-                            let current={let backend=ui.state::<Backend>();let core=backend.core();core.visible&&core.blur_generation==generation};
+                            let current={let backend=ui.state::<Backend>();let core=backend.core();core.visible&&!core.portal_dialog_open&&!core.portal_request_busy&&core.blur_generation==generation};
                             if current&&ui.get_webview_window("main").is_some_and(|w|!w.is_focused().unwrap_or(true)){hide_now(&ui);}
                         });});}
                     },
@@ -1215,24 +1391,33 @@ mod desktop {
                 let test_directory=if synthetic{Some(tempfile::Builder::new().prefix("pupa-test-").tempdir()?)}else{None};
                 let directory=match &test_directory{Some(temp)=>temp.path().to_path_buf(),None=>app.path().app_data_dir()?};
                 let storage=Storage::new(directory);let first_run=!storage.settings_path.exists();let loaded=storage.load();
+                #[cfg(feature="smoke-test")]
+                let loaded = { let mut loaded=loaded;
+                    if synthetic&&std::env::var("CI").is_ok()&&std::env::var("PUPA_ISOLATED_DESKTOP").as_deref()==Ok("1")&&std::env::var("PUPA_SMOKE_PORTAL_RESTORE").as_deref()==Ok("1") {
+                        loaded.settings.system_shortcut_enabled=true;
+                    }
+                    loaded
+                };
                 let mut history=History::new(loaded.settings.history_limit);history.restore(&loaded.entries,now_ms());let mut warning=loaded.warning;
                 if storage.save_settings(&loaded.settings).is_err(){warning=Some("設定を保存できませんでした。この起動中はメモリだけで動作します。".into());}
                 let wayland=cfg!(target_os="linux")&&(std::env::var_os("WAYLAND_DISPLAY").is_some()||std::env::var("XDG_SESSION_TYPE").as_deref()==Ok("wayland"));
-                let status=Status{shortcut_registered:false,shortcut_available:false,storage_warning:warning,position_warning:None,platform:if cfg!(target_os="macos"){"darwin"}else if cfg!(target_os="windows"){"win32"}else{"linux"},wayland,version:app.package_info().version.to_string()};
-                app.manage(Backend{core:Mutex::new(Core{history,settings:loaded.settings,lifecycle:CaptureLifecycle::default(),copy_dismissal:CopyDismissal::default(),placement:PlacementState::default(),status,settings_busy:false,source_busy:false,visible:false,shown_at:Instant::now(),blur_generation:0,snapshot_revision:0}),storage,synthetic,synthetic_clipboard:Mutex::new(None),_test_directory:test_directory});
+                let status=Status{shortcut_registered:false,shortcut_available:wayland,shortcut_backend:if wayland{"portal"}else{"native"},shortcut_state:if wayland{"needs-approval"}else{"unavailable"},shortcut_trigger:None,shortcut_warning:if wayland{Some(crate::shortcuts::NEEDS_APPROVAL.into())}else{None},storage_warning:warning,position_warning:None,platform:if cfg!(target_os="macos"){"darwin"}else if cfg!(target_os="windows"){"win32"}else{"linux"},wayland,version:app.package_info().version.to_string()};
+                app.manage(Backend{core:Mutex::new(Core{history,settings:loaded.settings,lifecycle:CaptureLifecycle::default(),copy_dismissal:CopyDismissal::default(),placement:PlacementState::default(),status,settings_busy:false,source_busy:false,portal_dialog_open:false,portal_focus_deadline:None,portal_request_busy:false,visible:false,shown_at:Instant::now(),blur_generation:0,snapshot_revision:0}),storage,synthetic,synthetic_clipboard:Mutex::new(None),_test_directory:test_directory});
                 let config=app.config().app.windows.iter().find(|w|w.label=="main").ok_or("Missing main window configuration")?;
                 let dev_url=app.config().build.dev_url.clone();
                 tauri::WebviewWindowBuilder::from_config(app,config)?.on_navigation(move|url|local_url(url,dev_url.as_ref()))
                     .on_new_window(|_,_|tauri::webview::NewWindowResponse::Deny).build()?;
                 #[cfg(target_os="macos")] app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 let handle=app.handle();let backend=handle.state::<Backend>();let shortcut=backend.core().settings.shortcut.clone();
-                // Linux global-hotkey requires an X11 connection even when GTK
-                // can open a Wayland window. Treat absence as a feature warning,
-                // never a fatal startup error that prevents the tray/UI opening.
-                let shortcut_available=handle.plugin(tauri_plugin_global_shortcut::Builder::new()
+                // X11 grabs are not compositor-wide on Wayland. Never report an
+                // XWayland registration as success or use it as a portal fallback.
+                let shortcut_available=!wayland&&handle.plugin(tauri_plugin_global_shortcut::Builder::new()
                     .with_handler(|app,_,event|{if event.state()==ShortcutState::Pressed{toggle(app);}}).build()).is_ok();
                 let shortcut_registered=shortcut_available&&shortcut_manager(handle).is_some_and(|manager|manager.register(shortcut.as_str()).is_ok());
-                {let mut core=backend.core();core.status.shortcut_available=shortcut_available;core.status.shortcut_registered=shortcut_registered;}
+                if !wayland {let mut core=backend.core();core.status.shortcut_available=shortcut_available;core.status.shortcut_registered=shortcut_registered;core.status.shortcut_state=if shortcut_registered{"registered"}else if shortcut_available{"error"}else{"unavailable"};core.status.shortcut_trigger=shortcut_registered.then_some(shortcut);}
+                let restoring_portal=wayland&&backend.core().settings.system_shortcut_enabled;
+                #[cfg(target_os="linux")]
+                if wayland { setup_portal_shortcut(handle); }
                 let tray_result=(||->tauri::Result<tauri::tray::TrayIcon>{
                     let bytes=if cfg!(target_os="macos"){include_bytes!("../../assets/trayTemplate.png").as_slice()}else{include_bytes!("../../assets/tray.png").as_slice()};
                     TrayIconBuilder::with_id("pupa-tray").icon(tauri::image::Image::from_bytes(bytes)?).icon_as_template(cfg!(target_os="macos"))
@@ -1245,7 +1430,7 @@ mod desktop {
                 // Synthetic startup has no OS clipboard calls. Native reads must
                 // stay off the GUI thread (required by the Linux clipboard plugin).
                 if synthetic { poll(handle); }
-                if first_run||tray_result.is_err()||!shortcut_registered||synthetic{show_now(handle);}
+                if first_run||tray_result.is_err()||(!shortcut_registered&&!restoring_portal)||synthetic{show_now(handle);}
                 // Work-area changes (panels, resolution, disconnected displays)
                 // need not generate a window resize. Only query them while shown.
                 { let handle=handle.clone();thread::spawn(move||loop {
@@ -1275,6 +1460,7 @@ mod desktop {
             clear_history,
             set_paused,
             update_settings,
+            request_system_shortcut,
             hide,
             quit,
             smoke_set_clipboard,
@@ -1294,6 +1480,7 @@ mod desktop {
             clear_history,
             set_paused,
             update_settings,
+            request_system_shortcut,
             hide,
             quit,
             smoke_set_clipboard,
@@ -1312,6 +1499,7 @@ mod desktop {
             clear_history,
             set_paused,
             update_settings,
+            request_system_shortcut,
             hide,
             quit
         ]);
@@ -1329,6 +1517,10 @@ mod desktop {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => show(app),
             tauri::RunEvent::Exit => {
+                #[cfg(target_os = "linux")]
+                if let Some(controller) = app.try_state::<crate::shortcuts::portal::Controller>() {
+                    controller.shutdown();
+                }
                 if let Some(backend) = app.try_state::<Backend>() {
                     let mut core = backend.core();
                     core.lifecycle.quitting = true;

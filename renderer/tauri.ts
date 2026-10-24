@@ -25,6 +25,7 @@ export function createTauriBridge(): PupaBridge {
   };
   return Object.freeze({
     getState: async () => { await Promise.all(subscriptions); return invoke<State>('get_state'); },
+    requestSystemShortcut: () => invoke<Result>('request_system_shortcut'),
     copyEntry: (id: string) => invoke<CopyResult>('copy_entry', { id }),
     completeCopyDismissal: (token: string) => invoke<Result>('complete_copy_dismissal', { token }),
     deleteEntry: (id: string) => invoke<Result>('delete_entry', { id }),
