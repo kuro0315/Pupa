@@ -31,7 +31,9 @@ export interface State {
   paused: boolean;
   status: {
     shortcutRegistered: boolean;
+    shortcutAvailable?: boolean;
     storageWarning: string | null;
+    positionWarning?: string | null;
     platform: string;
     wayland: boolean;
     version: string;

@@ -21,7 +21,7 @@
 | [↓ x64 インストーラー](https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml) | [↓ Apple Silicon / Intel](https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml) | [↓ x64 AppImage / deb](https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml) |
 | `.exe` | CPU に合う `.dmg` を選択 | `.AppImage` または `.deb` |
 
-**v0.2.1 · Tauri + Rust 開発ビルド。未署名・未公証です。** OS によって起動をブロックされる場合があります。保護を無効化せず、[インストールガイド](docs/INSTALL.md)を確認してください。
+**v0.2.2 · Tauri + Rust 開発ビルド。未署名・未公証です。** OS によって起動をブロックされる場合があります。保護を無効化せず、[インストールガイド](docs/INSTALL.md)を確認してください。
 
 ダウンロードには GitHub へのサインインが必要です。Actions の成功した実行から、自分の OS の Artifacts を選びます。成果物の保存期間は14日です。正式 Release はまだ公開していません。
 

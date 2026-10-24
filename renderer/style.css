@@ -238,7 +238,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 .history-reduction-warning input { margin: 3px 0 0; accent-color: #d2a770; }
 
 /* Original yellow/black terminal treatment: clipped industrial edges and
-   restrained cyan signals, without game branding, flashing, or added chrome. */
+   restrained cyan signals, without game branding, repeated flashing, or added chrome. */
 .clip-card { --card-color: #11161b; --card-border: #aeb72a; --neon: #eaf12b; border-radius: 0; background: var(--card-color); clip-path: polygon(0 10px,10px 0,calc(100% - 22px) 0,100% 22px,100% 100%,14px 100%,0 calc(100% - 14px)); box-shadow: inset 0 0 0 1px #dbe62a0d; }
 .color-butter { --card-color: #151914; --card-border: #b9be29; --neon: #f0f228; }
 .color-mint { --card-color: #101c1e; --card-border: #7aaca1; --neon: #dce72f; }
@@ -293,22 +293,38 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 }
 
 
-/* Copy success is acknowledged once, then the whole hand withdraws right.
-   This class is never added for failures or stale/native token-less responses. */
-.is-copy-dismiss .fan-viewport { animation: hand-copy-dismiss 260ms cubic-bezier(.45,0,.9,.4) forwards; }
+/* One unmistakable success pulse, not a repeated flash: the selected yellow
+   face becomes pale cyan with a strong inset rim as the hand withdraws right.
+   An empty pose silhouette lingers, never clipboard content. Success only. */
+.is-copy-dismiss .fan-viewport { animation: hand-copy-dismiss 300ms cubic-bezier(.45,0,.9,.4) forwards; }
 .is-copy-dismiss .card-slot { pointer-events: none; }
-.card-slot.is-copy-confirmed .clip-card { animation: card-copy-confirm 110ms ease-out 1; }
+.card-slot.is-copy-confirmed .clip-card { animation: card-copy-confirm 180ms ease-out 1 both; }
 .is-copy-dismissed .fan-viewport { animation: none; opacity: 0; transform: translateX(110%); }
 @keyframes card-copy-confirm {
-  0% { box-shadow: inset 0 0 0 1px #6deef566; }
-  45% { box-shadow: inset 0 0 0 3px #c5ffff; }
-  100% { box-shadow: inset 0 0 0 1px #6deef544; }
+  0%, 100% { background-color: #ecef29; border-color: #f6ff75; box-shadow: inset 0 0 0 1px #f8ff8722; }
+  18%, 68% { background-color: #d9ffff; border-color: #ffffff; box-shadow: inset 0 0 0 4px #54e7f3; }
 }
 @keyframes hand-copy-dismiss {
-  0%, 18% { opacity: 1; transform: translateX(0); }
+  0%, 30% { opacity: 1; transform: translateX(0); }
   100% { opacity: 0; transform: translateX(110%); }
+}
+.copy-afterimage {
+  position: absolute; z-index: 0; pointer-events: none; opacity: 0;
+  transform-origin: 50% 50%;
+  background: #7ff5ff38; border: 2px solid #d4ffff;
+  clip-path: polygon(0 10px,10px 0,calc(100% - 22px) 0,100% 22px,100% 100%,14px 100%,0 calc(100% - 14px));
+  box-shadow: inset 0 0 18px #7ff5ff88;
+  filter: drop-shadow(0 0 9px #5ceaff);
+  animation: card-copy-afterimage 420ms ease-out 1 forwards;
+}
+@keyframes card-copy-afterimage {
+  0% { opacity: 0; }
+  14% { opacity: .85; }
+  44% { opacity: .65; }
+  100% { opacity: 0; }
 }
 @media(prefers-reduced-motion:reduce) {
   .is-copy-dismiss .fan-viewport { animation: none !important; }
   .card-slot.is-copy-confirmed .clip-card { animation: none !important; }
+  .copy-afterimage { display: none; animation: none !important; }
 }

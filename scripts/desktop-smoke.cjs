@@ -5,7 +5,9 @@
 // The explicit smoke-test Cargo feature substitutes synthetic clipboard values
 // and a disposable data directory; normal release installers do not include it.
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+const runFile = promisify(execFile);
 const fs = require('node:fs');
 const path = require('node:path');
 const { setTimeout: sleep } = require('node:timers/promises');
@@ -16,6 +18,20 @@ const endpoint = `http://127.0.0.1:${port}`;
 let sessionId;
 let driver;
 let driverError;
+const artifactDir = process.env.PUPA_ARTIFACT_DIR || 'artifacts';
+const artifact = name => path.join(artifactDir, name);
+const scenario = process.env.PUPA_DESKTOP_SCENARIO || 'standard';
+const placementEvidence = [];
+let activeRecorder;
+const nativeVisualEntries = [
+  '七枚のクリップボード履歴を、画面いっぱいの扇で。\nこれは検証用のサンプルです。',
+  'https://v2.tauri.app/',
+  "const palette = ['cyan', 'violet', 'lime'];",
+  'IDEA LOG\n速く呼び出す。迷わず選ぶ。必要なときだけ、目の前に。',
+  'https://github.com/kuro0315/Pupa',
+  'function remember(text) {\n  return { text, local: true };\n}',
+  'ローカルで完結する、七つの手札。\n↑ ↓ で選択 / Enter でコピー / Esc で閉じる',
+];
 
 async function request(method, route, body) {
   const response = await fetch(`${endpoint}${route}`, {
@@ -152,11 +168,151 @@ async function count(expected) {
   return waitFor(async () => await execute('return document.querySelectorAll(".clip-card").length') === expected, `${expected} rendered cards`);
 }
 
+async function desktopDimensions() {
+  const { stdout } = await runFile('xdpyinfo', ['-display', process.env.DISPLAY], { timeout: 10_000 });
+  const match = stdout.match(/dimensions:\s+(\d+)x(\d+)\s+pixels/);
+  assert.ok(match, 'xdpyinfo reports the real X11 root dimensions');
+  const dimensions = { width: Number(match[1]), height: Number(match[2]) };
+  if (process.env.PUPA_SCREEN_WIDTH) assert.equal(dimensions.width, Number(process.env.PUPA_SCREEN_WIDTH));
+  if (process.env.PUPA_SCREEN_HEIGHT) assert.equal(dimensions.height, Number(process.env.PUPA_SCREEN_HEIGHT));
+  return dimensions;
+}
+async function x11WindowBounds() {
+  const { stdout } = await runFile('xwininfo', ['-display', process.env.DISPLAY, '-name', 'Pupa'], { timeout: 10_000 });
+  const field = (label) => {
+    const match = stdout.match(new RegExp(`${label}:\\s+(-?\\d+)`));
+    assert.ok(match, `xwininfo reports ${label}`);
+    return Number(match[1]);
+  };
+  assert.match(stdout, /Map State:\s+IsViewable/, 'the native X11 window is actually mapped');
+  return { x: field('Absolute upper-left X'), y: field('Absolute upper-left Y'), width: field('Width'), height: field('Height'), borderWidth: field('Border width') };
+}
+async function verifyDesktopPlacement(label) {
+  const root = await desktopDimensions();
+  let lastNative;
+  const observation = await waitFor(async () => {
+    const native = await invoke('smoke_geometry');
+    lastNative = native;
+    assert.equal(native.backend, 'x11', 'hosted position evidence is explicitly X11, not Wayland');
+    assert.equal(native.positioningSupported, true);
+    assert.equal(native.ready, true, `native placement is ready: ${native.lastError || ''}`);
+    assert.equal(native.visible, true);
+    const os = await x11WindowBounds();
+    const viewport = await execute(`return {width:innerWidth,height:innerHeight,devicePixelRatio,screenWidth:screen.width,screenHeight:screen.height,
+      expanded:document.querySelectorAll('.card-slot.is-expanded').length,
+      cards:[...document.querySelectorAll('.clip-card')].map(card => { const r=card.getBoundingClientRect(); return {left:r.left,right:r.right,top:r.top,bottom:r.bottom}; })};`);
+    const area = native.selectedMonitor.workArea;
+    const bounds = native.selectedMonitor.bounds;
+    const near = (actual, expected, description) => assert.ok(Math.abs(actual - expected) <= 2, `${description}: actual ${actual}, expected ${expected}`);
+    // Every Xvfb scenario has one monitor and no panel reservation. This is a
+    // check against an independent OS query, not self-consistent CSS numbers.
+    near(bounds.position.x, 0, 'monitor physical origin X'); near(bounds.position.y, 0, 'monitor physical origin Y');
+    near(bounds.size.width, root.width, 'monitor physical width'); near(bounds.size.height, root.height, 'monitor physical height');
+    near(area.position.x, 0, 'single-monitor work-area X'); near(area.position.y, 0, 'single-monitor work-area Y');
+    near(area.size.width, root.width, 'single-monitor work-area width'); near(area.size.height, root.height, 'single-monitor work-area height');
+    near(os.x, native.actual.outerPosition.x, 'Tauri position agrees with actual X11 window X');
+    near(os.y, native.actual.outerPosition.y, 'Tauri position agrees with actual X11 window Y');
+    near(os.width, native.actual.outerSize.width, 'Tauri width agrees with actual X11 window');
+    near(os.height, native.actual.outerSize.height, 'Tauri height agrees with actual X11 window');
+    assert.equal(os.borderWidth, 0, 'the configured frameless native window has no X11 border');
+    near(os.width, Math.min(root.width, 780 * Number(process.env.GDK_SCALE || 1)), 'OS window width matches the independently configured logical width and GTK scale');
+    near(os.x + os.width + os.borderWidth * 2, area.position.x + area.size.width, 'actual native right edge meets monitor work-area right');
+    near(os.y, area.position.y, 'actual native top meets work-area top');
+    near(os.height, area.size.height, 'actual native height follows work-area height');
+    near(native.actual.innerSize.width, Math.min(root.width, 780 * native.actual.scaleFactor), 'native width is 780 logical pixels, bounded to display');
+    near(viewport.width * viewport.devicePixelRatio, native.actual.innerSize.width, 'CSS width/DPR agrees with physical client width');
+    near(viewport.height * viewport.devicePixelRatio, native.actual.innerSize.height, 'CSS height/DPR agrees with physical client height');
+    if (process.env.GDK_SCALE) {
+      assert.equal(native.actual.scaleFactor, Number(process.env.GDK_SCALE), 'requested GTK scale is active');
+      assert.equal(native.selectedMonitor.scaleFactor, Number(process.env.GDK_SCALE), 'selected monitor scale matches GTK scale');
+      assert.equal(viewport.devicePixelRatio, Number(process.env.GDK_SCALE), 'WebKit HiDPI devicePixelRatio is active');
+    }
+    if (viewport.cards.length === 7 && viewport.expanded === 0) {
+      // Do not stop at a correctly placed empty/transparent window: map actual
+      // rendered card bounds through the independent OS position into the root.
+      for (const card of viewport.cards) {
+        const physicalRight = os.x + card.right * viewport.devicePixelRatio;
+        const gap = root.width - physicalRight;
+        assert.ok(gap >= -2 && gap <= 24 * viewport.devicePixelRatio,
+          `resting card reaches the physical screen's right rail, not its center: gap ${gap}px`);
+        assert.ok(os.y + card.top * viewport.devicePixelRatio >= -2, 'resting card top is on the physical desktop');
+        assert.ok(os.y + card.bottom * viewport.devicePixelRatio <= root.height + 2, 'resting card bottom is on the physical desktop');
+      }
+    }
+    return { label, scenario, root, osWindow: os, viewport, native };
+  }, `actual desktop right-edge placement (${label})`).catch(error => {
+    const diagnostic = { label, scenario, root, native: lastNative, error: error.message };
+    fs.writeFileSync(artifact('pupa-native-desktop-failure.json'), JSON.stringify(diagnostic, null, 2) + '\n');
+    console.error('Native placement diagnostic:', JSON.stringify(diagnostic));
+    throw error;
+  });
+  placementEvidence.push(observation);
+  fs.writeFileSync(artifact('pupa-native-desktop-geometry.json'), JSON.stringify({
+    scope: 'Single-monitor isolated Xvfb/X11 only; not proof of native Wayland or mixed-DPI multi-monitor behavior.',
+    observations: placementEvidence,
+  }, null, 2) + '\n');
+  console.log(`PASS: ${scenario}/${label}: desktop ${root.width}x${root.height}, window right=${observation.osWindow.x + observation.osWindow.width}, scale=${observation.native.actual.scaleFactor}`);
+  return root;
+}
+async function captureDesktop(filename, dimensions) {
+  const output = artifact(filename);
+  await runFile('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-f', 'x11grab', '-draw_mouse', '1',
+    '-video_size', `${dimensions.width}x${dimensions.height}`, '-i', `${process.env.DISPLAY}+0,0`, '-frames:v', '1', '-threads', '1', output], { timeout: 15_000 });
+  const png = fs.readFileSync(output);
+  assert.equal(png.readUInt32BE(16), dimensions.width, 'screenshot covers the entire physical desktop width');
+  assert.equal(png.readUInt32BE(20), dimensions.height, 'screenshot covers the entire physical desktop height');
+}
+async function startDesktopRecording(dimensions) {
+  const output = artifact('pupa-native-desktop-copy.mp4');
+  let firstFrame = false, closed = false, failure;
+  let stderr = '';
+  const recorder = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'x11grab', '-draw_mouse', '1',
+    '-framerate', '30', '-video_size', `${dimensions.width}x${dimensions.height}`, '-i', `${process.env.DISPLAY}+0,0`,
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '19', '-pix_fmt', 'yuv420p', '-threads', '2', '-t', '8',
+    '-progress', 'pipe:1', '-stats_period', '0.1', output], { stdio: ['pipe', 'pipe', 'pipe'] });
+  recorder.stdout.on('data', chunk => { if (/frame=\s*[1-9]\d*/.test(chunk.toString())) firstFrame = true; });
+  recorder.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-8000); });
+  const completion = new Promise(resolve => {
+    recorder.on('error', error => { failure = error; closed = true; resolve(); });
+    recorder.on('close', code => { if (code !== 0 && !failure) failure = new Error(`Desktop recorder exited ${code}: ${stderr}`); closed = true; resolve(); });
+  });
+  const stop = async () => {
+    if (!closed) recorder.stdin.write('q\n');
+    await completion;
+    if (failure) throw failure;
+    const { stdout } = await runFile('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height:format=duration', '-of', 'json', output], { timeout: 10_000 });
+    const metadata = JSON.parse(stdout);
+    assert.equal(metadata.streams[0].width, dimensions.width);
+    assert.equal(metadata.streams[0].height, dimensions.height);
+    assert.ok(Number(metadata.format.duration) >= 0.5, 'native desktop video contains multiple real frames');
+    fs.writeFileSync(artifact('pupa-native-desktop-video.json'), JSON.stringify({ scenario, source: 'FFmpeg X11 root capture, not browser rendering', ...metadata }, null, 2) + '\n');
+  };
+  activeRecorder = stop;
+  await waitFor(() => { if (failure) throw failure; return firstFrame; }, 'first full-desktop video frame');
+  return async () => { await stop(); activeRecorder = undefined; };
+}
+async function positionOnlyProof() {
+  for (const text of nativeVisualEntries) await collect(text);
+  await count(7);
+  await sleep(1300);
+  const dimensions = await verifyDesktopPlacement('seven-card fan');
+  await captureDesktop('pupa-native-full-desktop.png', dimensions);
+  fs.writeFileSync(artifact('pupa-native-window.png'), Buffer.from(await request('GET', `/session/${sessionId}/screenshot`), 'base64'));
+  await key('\uE00C');
+  await waitFor(async () => !(await invoke('smoke_state')).visible, 'position scenario Escape hide');
+  await invoke('smoke_toggle');
+  await waitFor(async () => (await invoke('smoke_state')).visible, 'position scenario reopen');
+  await verifyDesktopPlacement('reopened');
+  console.log(`PASS: ${scenario} physical desktop placement and full-root screenshot; no multi-monitor/Wayland claim.`);
+}
+
 async function main() {
   assert.equal(process.platform, 'linux', 'Native smoke currently requires Linux WebKitGTK');
   assert.ok(process.env.DISPLAY, 'Start the smoke in an isolated Xvfb desktop');
   assert.ok(fs.existsSync(application), `Build the smoke-test binary first: ${application}`);
-  driver = spawn(process.env.TAURI_DRIVER || 'tauri-driver', ['--port', String(port)], {
+  assert.equal(process.env.PUPA_ISOLATED_DESKTOP, '1', 'desktop capture is allowed only in the isolated synthetic CI desktop');
+  fs.mkdirSync(artifactDir, { recursive: true });
+  driver = spawn(process.env.TAURI_DRIVER || 'tauri-driver', ['--port', String(port), '--native-port', String(port + 1)], {
     stdio: 'inherit', env: { ...process.env, PUPA_TEST_MODE: '1' },
   });
   driver.on('error', error => { driverError = error; });
@@ -174,6 +330,8 @@ async function main() {
     assert.equal(initial.state.settings.persistence, false, 'history is opt-in');
     assert.equal(initial.state.entries.length, 0, 'fresh synthetic test history');
     assert.equal(initial.visible, true, 'test window starts visible');
+    await verifyDesktopPlacement('startup');
+    if (process.env.PUPA_SMOKE_POSITION_ONLY === '1') { await positionOnlyProof(); return; }
     assert.equal((await invoke('smoke_native_clipboard_roundtrip')).ok, true, 'real isolated OS clipboard round-trip uses only its own synthetic value');
 
     await collect('小さなひらめきを、逃さない。\n今日の「いいな」を、明日のアイデアに。');
@@ -184,9 +342,9 @@ async function main() {
     await key('\uE015'); // ArrowDown expands the same card as hover.
     await waitFor(() => execute('return document.querySelectorAll(".card-slot.is-expanded").length === 1'), 'keyboard expansion');
     await sleep(1200);
-    fs.mkdirSync('artifacts', { recursive: true });
+    fs.mkdirSync(artifactDir, { recursive: true });
     const screenshot = await request('GET', `/session/${sessionId}/screenshot`);
-    fs.writeFileSync('artifacts/pupa-tauri-native-linux.png', Buffer.from(screenshot, 'base64'));
+    fs.writeFileSync(artifact('pupa-tauri-native-linux.png'), Buffer.from(screenshot, 'base64'));
     await key('\uE007'); // Enter copies the selected card and hides.
     await waitFor(async () => !(await invoke('smoke_state')).visible, 'copy-and-hide');
     assert.match((await invoke('smoke_state')).syntheticClipboard, /littleThings/);
@@ -219,22 +377,16 @@ async function main() {
     // above remains a separate record of the preceding integration assertions.
     await invoke('smoke_tick'); // Clear resets the baseline; do not recapture its previous synthetic value.
     assert.equal((await invoke('smoke_state')).state.entries.length, 0);
-    for (const text of [
-      '七枚のクリップボード履歴を、画面いっぱいの扇で。\nこれは検証用のサンプルです。',
-      'https://v2.tauri.app/',
-      "const palette = ['cyan', 'violet', 'lime'];",
-      'IDEA LOG\n速く呼び出す。迷わず選ぶ。必要なときだけ、目の前に。',
-      'https://github.com/kuro0315/Pupa',
-      'function remember(text) {\n  return { text, local: true };\n}',
-      'ローカルで完結する、七つの手札。\n↑ ↓ で選択 / Enter でコピー / Esc で閉じる',
-    ]) await collect(text);
+    for (const text of nativeVisualEntries) await collect(text);
     assert.equal((await invoke('smoke_state')).state.entries.length, 7);
     await invoke('smoke_toggle');
     await waitFor(async () => (await invoke('smoke_state')).visible, 'seven-card native fan reopen');
     await count(7);
     await waitFor(() => execute('return document.querySelectorAll(".card-slot.is-expanded").length === 0'), 'resting native fan');
     await sleep(1300);
-    fs.writeFileSync('artifacts/pupa-tauri-native-fan-linux.png', Buffer.from(await request('GET', `/session/${sessionId}/screenshot`), 'base64'));
+    const desktop = await verifyDesktopPlacement('seven-card fan');
+    await captureDesktop('pupa-native-full-desktop.png', desktop);
+    fs.writeFileSync(artifact('pupa-tauri-native-fan-linux.png'), Buffer.from(await request('GET', `/session/${sessionId}/screenshot`), 'base64'));
 
     const pointerTargets = await restingPointerTargets();
     assert.equal(pointerTargets.length, 7);
@@ -253,7 +405,7 @@ async function main() {
       visited.push(target.index + 1);
       previous = target;
     }
-    fs.writeFileSync('artifacts/pupa-tauri-native-pointer-linux.png', Buffer.from(await request('GET', `/session/${sessionId}/screenshot`), 'base64'));
+    fs.writeFileSync(artifact('pupa-tauri-native-pointer-linux.png'), Buffer.from(await request('GET', `/session/${sessionId}/screenshot`), 'base64'));
     const afterSweep = await invoke('smoke_state');
     assert.equal(afterSweep.visible, true, 'pointer sweep never hides or auto-copies');
     assert.equal(afterSweep.syntheticClipboard, beforeSweep.syntheticClipboard, 'pointer sweep never changes the clipboard');
@@ -261,13 +413,13 @@ async function main() {
     await movePointer(2, 2);
     await waitFor(() => execute('return document.querySelectorAll(".card-slot.is-expanded").length === 0'), 'pointer leaving the hand clears expansion');
     await expectReturned(previous.id);
-    fs.writeFileSync('artifacts/pupa-native-pointer-report.json', JSON.stringify({ visited, targets: pointerTargets, clipboardUnchanged: true, historyUnchanged: true, leaveClearsExpansion: true }, null, 2) + '\n');
+    fs.writeFileSync(artifact('pupa-native-pointer-report.json'), JSON.stringify({ visited, targets: pointerTargets, clipboardUnchanged: true, historyUnchanged: true, leaveClearsExpansion: true }, null, 2) + '\n');
 
     await key('\uE015');
     await expectExpanded(pointerTargets[0].id, 'keyboard selects the first card after pointer leave');
     await waitFor(() => execute('return document.querySelectorAll(".card-slot.is-expanded").length === 1'), 'expanded native fan card');
     await sleep(600);
-    fs.writeFileSync('artifacts/pupa-tauri-native-hover-linux.png', Buffer.from(await request('GET', `/session/${sessionId}/screenshot`), 'base64'));
+    fs.writeFileSync(artifact('pupa-tauri-native-hover-linux.png'), Buffer.from(await request('GET', `/session/${sessionId}/screenshot`), 'base64'));
     await key('\uE015');
     await expectExpanded(pointerTargets[1].id, 'keyboard navigation continues after pointer sweep');
     assert.equal((await invoke('smoke_state')).syntheticClipboard, beforeSweep.syntheticClipboard, 'keyboard navigation alone never copies');
@@ -290,13 +442,37 @@ async function main() {
     assert.equal(beforeClick.visible, true, 'window stays visible until the explicit pointer click');
     assert.equal(beforeClick.syntheticClipboard, clickSentinel, 'moving onto the left extension does not copy');
     assert.deepEqual(beforeClick.state.entries, beforeSweep.state.entries, 'left-extension movement never changes history');
-    fs.writeFileSync('artifacts/pupa-tauri-native-left-click-linux.png', Buffer.from(await request('GET', `/session/${sessionId}/screenshot`), 'base64'));
+    fs.writeFileSync(artifact('pupa-tauri-native-left-click-linux.png'), Buffer.from(await request('GET', `/session/${sessionId}/screenshot`), 'base64'));
+    await verifyDesktopPlacement('before copy');
+    const stopRecording = await startDesktopRecording(desktop);
+    await execute(`
+      window.__pupaNativeCopyVisual = { reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, confirmed: false, dismiss: false, afterimage: false, afterimageContainsText: false };
+      window.__pupaNativeCopyObserver = new MutationObserver(() => {
+        const proof = window.__pupaNativeCopyVisual;
+        proof.confirmed ||= Boolean(document.querySelector('.is-copy-confirmed'));
+        proof.dismiss ||= Boolean(document.querySelector('.fan-stage.is-copy-dismiss'));
+        const ghost = document.querySelector('[data-testid="copy-afterimage"]');
+        if (ghost) { proof.afterimage = true; proof.afterimageContainsText ||= Boolean(ghost.textContent.trim()); }
+      });
+      window.__pupaNativeCopyObserver.observe(document.body, { subtree: true, attributes: true, childList: true });
+    `);
+    await sleep(250);
     await clickPointer();
     await waitFor(async () => !(await invoke('smoke_state')).visible, 'explicit left-extension pointer click copies and hides');
+    await sleep(800);
+    await stopRecording();
+    const visualProof = await execute('window.__pupaNativeCopyObserver.disconnect(); return window.__pupaNativeCopyVisual;');
+    if (!visualProof.reducedMotion) {
+      assert.equal(visualProof.confirmed, true, 'real native copy shows a confirmation pulse');
+      assert.equal(visualProof.dismiss, true, 'real native hand retracts on successful copy');
+      assert.equal(visualProof.afterimage, true, 'real native copy leaves a transient afterimage');
+      assert.equal(visualProof.afterimageContainsText, false, 'afterimage never duplicates clipboard text');
+    }
+    fs.writeFileSync(artifact('pupa-native-copy-visual-report.json'), JSON.stringify(visualProof, null, 2) + '\n');
     const afterClick = await invoke('smoke_state');
     assert.equal(afterClick.syntheticClipboard, firstEntry.text, 'left-extension pointer click recopies the exact first card text');
     assert.deepEqual(afterClick.state.entries, beforeSweep.state.entries, 'copying the left extension never mutates history');
-    fs.writeFileSync('artifacts/pupa-native-left-click-report.json', JSON.stringify({ cardId: firstEntry.id, point: leftPoint, outsideEveryRestingRectangle: true, clipboardChangedOnlyAfterClick: true, exactTextCopied: true, hiddenAfterClick: true }, null, 2) + '\n');
+    fs.writeFileSync(artifact('pupa-native-left-click-report.json'), JSON.stringify({ cardId: firstEntry.id, point: leftPoint, outsideEveryRestingRectangle: true, clipboardChangedOnlyAfterClick: true, exactTextCopied: true, hiddenAfterClick: true }, null, 2) + '\n');
     // Exercise the native handshake without renderer animation. Commands in the
     // pending probe share one in-page async call, avoiding HTTP round-trip gaps
     // against the 650 ms safety fallback and requiring no sub-100 ms assertion.
@@ -350,10 +526,17 @@ async function main() {
     await sleep(900); // Exceeds the native 650 ms fallback after the new presentation.
     assert.equal((await invoke('smoke_state')).visible, true, 'stale completion and fallback cannot hide a reopened window');
     assert.equal(await execute('return document.querySelector(".fan-stage").classList.contains("is-copy-dismiss")'), false, 'reopened renderer has no stale dismissal animation');
-    fs.writeFileSync('artifacts/pupa-native-dismissal-report.json', JSON.stringify({ failureHasNoToken: true, pendingDuplicateBlocked: true, explicitCompletionHides: true, nativeFallbackHides: true, reopenedWindowSurvivesStaleCompletionAndFallback: true }, null, 2) + '\n');
+    fs.writeFileSync(artifact('pupa-native-dismissal-report.json'), JSON.stringify({ failureHasNoToken: true, pendingDuplicateBlocked: true, explicitCompletionHides: true, nativeFallbackHides: true, reopenedWindowSurvivesStaleCompletionAndFallback: true }, null, 2) + '\n');
 
     console.log('PASS: native Tauri startup, Rust commands/events, synthetic clipboard capture, memory-only default, keyboard copy-and-hide, repeated toggle/Escape, pause baseline, pin/delete/clear, seven-card resting/expanded native screenshots, real pointer sweep 1→7→1, stable hover/return/leave without copy, keyboard after pointer, explicit left-extension pointer click with exact copy-and-hide, pending dismissal/duplicate/fallback/reopen token safety.');
+  } catch (error) {
+    if (sessionId) {
+      try { await captureDesktop('pupa-native-failure-full-desktop.png', await desktopDimensions()); }
+      catch (captureError) { console.error('Failure desktop capture:', captureError.message); }
+    }
+    throw error;
   } finally {
+    if (activeRecorder) await activeRecorder().catch(error => console.error('Desktop recorder cleanup:', error.message));
     if (sessionId) await request('DELETE', `/session/${sessionId}`).catch(error => console.error('WebDriver cleanup:', error.message));
     driver?.kill('SIGTERM');
   }

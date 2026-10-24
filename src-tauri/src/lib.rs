@@ -1,3 +1,4 @@
+pub mod geometry;
 pub mod history;
 pub mod power;
 pub mod source_app;
@@ -7,9 +8,11 @@ pub use desktop::{run, set_session_blocked};
 #[cfg(feature = "desktop")]
 mod desktop {
     use crate::{
+        geometry::{self, Extent, MonitorGeometry, Placement, Point, Rect},
         history::{CaptureLifecycle, CopyDismissal, Entry, History, Settings, MAX_TEXT_BYTES},
         storage::Storage,
     };
+    use raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
     use serde::Serialize;
     use serde_json::Value;
     use std::{
@@ -23,7 +26,7 @@ mod desktop {
         AppHandle, Emitter, Manager, WebviewWindow, WindowEvent,
     };
     use tauri_plugin_clipboard_manager::ClipboardExt;
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+    use tauri_plugin_global_shortcut::{GlobalShortcut, Shortcut, ShortcutState};
     const MISSING_ENTRY: &str = "このカードは見つかりませんでした。";
     const STORAGE_ERROR: &str =
         "履歴の保存・削除ができませんでした。保存先の権限や空き容量を確認してください。";
@@ -33,7 +36,9 @@ mod desktop {
     #[serde(rename_all = "camelCase")]
     struct Status {
         shortcut_registered: bool,
+        shortcut_available: bool,
         storage_warning: Option<String>,
+        position_warning: Option<String>,
         platform: &'static str,
         wayland: bool,
         version: String,
@@ -71,11 +76,37 @@ mod desktop {
             }
         }
     }
+    #[derive(Clone)]
+    struct PlacementState {
+        generation: u64,
+        backend: &'static str,
+        monitor: Option<MonitorGeometry>,
+        requested: Option<Placement>,
+        scheduled: bool,
+        attempts: u8,
+        ready: bool,
+        last_error: Option<String>,
+    }
+    impl Default for PlacementState {
+        fn default() -> Self {
+            Self {
+                generation: 0,
+                backend: "unknown",
+                monitor: None,
+                requested: None,
+                scheduled: false,
+                attempts: 0,
+                ready: false,
+                last_error: None,
+            }
+        }
+    }
     struct Core {
         history: History,
         settings: Settings,
         lifecycle: CaptureLifecycle,
         copy_dismissal: CopyDismissal,
+        placement: PlacementState,
         status: Status,
         settings_busy: bool,
         source_busy: bool,
@@ -196,24 +227,292 @@ mod desktop {
             }
         }
     }
-    fn position_window(window: &WebviewWindow) {
-        let monitor = window
-            .cursor_position()
-            .ok()
-            .and_then(|p| window.monitor_from_point(p.x, p.y).ok().flatten())
-            .or_else(|| window.current_monitor().ok().flatten())
-            .or_else(|| window.primary_monitor().ok().flatten());
-        if let Some(monitor) = monitor {
-            let area = monitor.work_area();
-            let width = (780.0 * monitor.scale_factor())
-                .round()
-                .min(area.size.width as f64) as u32;
-            let _ = window.set_size(tauri::PhysicalSize::new(width, area.size.height));
-            let _ = window.set_position(tauri::PhysicalPosition::new(
-                area.position.x + area.size.width as i32 - width as i32,
-                area.position.y,
-            ));
+    const POSITION_RETRIES: u8 = 6;
+    const WAYLAND_POSITION_WARNING: &str = "このアプリはネイティブ Wayland で動作しているため、ウィンドウを画面の右端へ配置できません。XWayland が利用できる環境ではアプリが自動で優先します。明示した GDK_BACKEND 設定がある場合は、その設定を優先しています。";
+    const POSITION_FAILED_WARNING: &str = "画面の右端への配置を確認できませんでした。デスクトップ環境が移動を制限している可能性があります。もう一度カードをひらいてください。";
+    fn backend_name(window: &WebviewWindow) -> &'static str {
+        match window.display_handle().map(|handle| handle.as_raw()) {
+            Ok(RawDisplayHandle::Xlib(_)) | Ok(RawDisplayHandle::Xcb(_)) => "x11",
+            Ok(RawDisplayHandle::Wayland(_)) => "wayland",
+            Ok(_) => "native",
+            Err(_) => "unknown",
         }
+    }
+    fn monitor_geometry(monitor: &tauri::Monitor) -> MonitorGeometry {
+        let position = monitor.position();
+        let size = monitor.size();
+        let work = monitor.work_area();
+        MonitorGeometry {
+            name: monitor.name().cloned(),
+            bounds: Rect {
+                position: Point {
+                    x: position.x,
+                    y: position.y,
+                },
+                size: Extent {
+                    width: size.width,
+                    height: size.height,
+                },
+            },
+            work_area: Rect {
+                position: Point {
+                    x: work.position.x,
+                    y: work.position.y,
+                },
+                size: Extent {
+                    width: work.size.width,
+                    height: work.size.height,
+                },
+            },
+            scale_factor: monitor.scale_factor(),
+        }
+    }
+    fn selected_monitor(
+        window: &WebviewWindow,
+        previous: Option<&MonitorGeometry>,
+        backend: &str,
+    ) -> Option<MonitorGeometry> {
+        let mut monitors: Vec<_> = window
+            .available_monitors()
+            .unwrap_or_default()
+            .iter()
+            .map(monitor_geometry)
+            .collect();
+        let current = window
+            .current_monitor()
+            .ok()
+            .flatten()
+            .map(|m| monitor_geometry(&m));
+        let primary = window
+            .primary_monitor()
+            .ok()
+            .flatten()
+            .map(|m| monitor_geometry(&m));
+        if monitors.is_empty() {
+            monitors.extend(current.clone().or(primary.clone()));
+        }
+        // Keep this show on the selected monitor. Pointer movement must not make
+        // post-map or resize corrections jump between displays.
+        if let Some(index) = previous.and_then(|p| geometry::matching_monitor(&monitors, p)) {
+            return Some(monitors[index].clone());
+        }
+        let current_index = current
+            .as_ref()
+            .and_then(|m| geometry::matching_monitor(&monitors, m));
+        let primary_index = primary
+            .as_ref()
+            .and_then(|m| geometry::matching_monitor(&monitors, m));
+        // Tao's Linux monitor_from_point forwards physical cursor coordinates to
+        // GTK's logical monitor_at_point. Compare physical rectangles ourselves.
+        let cursor = if let Some(previous) = previous {
+            // After a display disappears, prefer the OS's current monitor. If
+            // unavailable, use the former target's center, not a moving pointer.
+            if current_index.is_none() {
+                Some((
+                    f64::from(previous.bounds.position.x)
+                        + f64::from(previous.bounds.size.width) / 2.0,
+                    f64::from(previous.bounds.position.y)
+                        + f64::from(previous.bounds.size.height) / 2.0,
+                ))
+            } else {
+                None
+            }
+        } else if backend == "wayland" {
+            None
+        } else {
+            window.cursor_position().ok().map(|p| (p.x, p.y))
+        };
+        geometry::select_monitor(&monitors, cursor, current_index, primary_index)
+            .map(|i| monitors[i].clone())
+    }
+    fn update_position_warning(app: &AppHandle, warning: Option<String>) {
+        let changed = {
+            let backend = app.state::<Backend>();
+            let mut core = backend.core();
+            if core.status.position_warning == warning {
+                false
+            } else {
+                core.status.position_warning = warning;
+                true
+            }
+        };
+        if changed {
+            publish(app);
+        }
+    }
+    fn begin_placement(window: &WebviewWindow) {
+        let backend_name = backend_name(window);
+        let monitor = selected_monitor(window, None, backend_name);
+        {
+            let backend = window.app_handle().state::<Backend>();
+            let mut core = backend.core();
+            let generation = core.placement.generation.wrapping_add(1);
+            core.placement = PlacementState {
+                generation,
+                backend: backend_name,
+                monitor,
+                ..PlacementState::default()
+            };
+        }
+        position_window(window);
+    }
+    /// Called on the GUI thread. Native set_size/set_position may enqueue work,
+    /// so map/resize events and bounded delayed checks verify actual OS geometry.
+    fn position_window(window: &WebviewWindow) {
+        let app = window.app_handle();
+        let previous = {
+            let backend = app.state::<Backend>();
+            let core = backend.core();
+            if !core.visible {
+                return;
+            }
+            core.placement.clone()
+        };
+        let supported = matches!(previous.backend, "x11" | "native");
+        let monitor = selected_monitor(window, previous.monitor.as_ref(), previous.backend);
+        let Some((monitor, desired, area)) = monitor.and_then(|m| {
+            Some((
+                m.clone(),
+                geometry::desired_placement(&m)?,
+                m.usable_area()?,
+            ))
+        }) else {
+            let warning = "画面のサイズを取得できず、右端への配置を確認できませんでした。";
+            {
+                let backend = app.state::<Backend>();
+                let mut core = backend.core();
+                core.placement.ready = false;
+                core.placement.last_error = Some(warning.into());
+            }
+            update_position_warning(app, Some(warning.into()));
+            return;
+        };
+        if !supported {
+            // Wayland forbids global positioning, not fitting to the display.
+            // Avoid retaining the configured 900px height on a smaller screen.
+            if window.inner_size().ok().map(|s| (s.width, s.height))
+                != Some((desired.size.width, desired.size.height))
+            {
+                let _ = window.set_size(tauri::PhysicalSize::new(
+                    desired.size.width,
+                    desired.size.height,
+                ));
+            }
+            let warning = if previous.backend == "wayland" {
+                WAYLAND_POSITION_WARNING
+            } else {
+                POSITION_FAILED_WARNING
+            };
+            {
+                let backend = app.state::<Backend>();
+                let mut core = backend.core();
+                core.placement.monitor = Some(monitor);
+                core.placement.requested = Some(desired);
+                core.placement.ready = false;
+                core.placement.last_error = Some(warning.into());
+            }
+            update_position_warning(app, Some(warning.into()));
+            return;
+        }
+        let inner = window.inner_size().ok().map(|s| Extent {
+            width: s.width,
+            height: s.height,
+        });
+        let outer = window.outer_size().ok().map(|s| Extent {
+            width: s.width,
+            height: s.height,
+        });
+        let origin = window
+            .outer_position()
+            .ok()
+            .map(|p| Point { x: p.x, y: p.y });
+        let ready = match (inner, outer, origin) {
+            (Some(i), Some(o), Some(p)) => geometry::placement_matches(area, desired, p, o, i),
+            _ => false,
+        };
+        let monitor_changed = previous.monitor.as_ref() != Some(&monitor);
+        let attempts = if ready || monitor_changed {
+            0
+        } else {
+            previous.attempts
+        };
+        let mut error = None;
+        let mut attempted = false;
+        if !ready && attempts < POSITION_RETRIES {
+            attempted = true;
+            if inner != Some(desired.size) {
+                if let Err(e) = window.set_size(tauri::PhysicalSize::new(
+                    desired.size.width,
+                    desired.size.height,
+                )) {
+                    error = Some(e.to_string());
+                }
+            }
+            let actual_outer = outer
+                .filter(|s| s.width > 0 && s.height > 0)
+                .unwrap_or(desired.size);
+            let target = geometry::anchored_origin(area, actual_outer);
+            if origin != Some(target) {
+                if let Err(e) =
+                    window.set_position(tauri::PhysicalPosition::new(target.x, target.y))
+                {
+                    error = Some(e.to_string());
+                }
+            }
+        }
+        let attempts = if attempted { attempts + 1 } else { attempts };
+        let exhausted = !ready && attempts >= POSITION_RETRIES;
+        {
+            let backend = app.state::<Backend>();
+            let mut core = backend.core();
+            if core.placement.generation != previous.generation || !core.visible {
+                return;
+            }
+            core.placement.monitor = Some(monitor);
+            core.placement.requested = Some(desired);
+            core.placement.ready = ready;
+            core.placement.attempts = attempts;
+            core.placement.last_error = if ready {
+                None
+            } else {
+                error.or_else(|| exhausted.then(|| POSITION_FAILED_WARNING.into()))
+            };
+        }
+        update_position_warning(app, exhausted.then(|| POSITION_FAILED_WARNING.into()));
+        if !ready && !exhausted {
+            schedule_placement_check(app);
+        }
+    }
+    fn schedule_placement_check(app: &AppHandle) {
+        let generation = {
+            let Some(backend) = app.try_state::<Backend>() else {
+                return;
+            };
+            let mut core = backend.core();
+            if !core.visible || core.placement.scheduled {
+                return;
+            }
+            core.placement.scheduled = true;
+            core.placement.generation
+        };
+        let handle = app.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(80));
+            let ui = handle.clone();
+            let _ = handle.run_on_main_thread(move || {
+                {
+                    let backend = ui.state::<Backend>();
+                    let mut core = backend.core();
+                    if !core.visible || core.placement.generation != generation {
+                        return;
+                    }
+                    core.placement.scheduled = false;
+                }
+                if let Some(window) = ui.get_webview_window("main") {
+                    position_window(&window);
+                }
+            });
+        });
     }
     fn show_now(app: &AppHandle) {
         let Some(backend) = app.try_state::<Backend>() else {
@@ -231,8 +530,10 @@ mod desktop {
             core.visible = true;
         }
         if let Some(window) = app.get_webview_window("main") {
-            position_window(&window);
+            begin_placement(&window);
             let _ = window.show();
+            // The WM can override a pre-map placement. Always verify after map.
+            schedule_placement_check(app);
             let _ = window.set_focus();
             let _ = window.emit("pupa-shown", ());
         }
@@ -245,6 +546,9 @@ mod desktop {
         if let Some(backend) = app.try_state::<Backend>() {
             let mut core = backend.core();
             core.visible = false;
+            core.placement.generation = core.placement.generation.wrapping_add(1);
+            core.placement.scheduled = false;
+            core.placement.ready = false;
             core.copy_dismissal.invalidate();
             core.blur_generation = core.blur_generation.wrapping_add(1);
         }
@@ -301,6 +605,11 @@ mod desktop {
             hide_window(app);
         }
     }
+    fn shortcut_manager(app: &AppHandle) -> Option<tauri::State<'_, GlobalShortcut<tauri::Wry>>> {
+        // The plugin can legitimately be unavailable (e.g. no X11 connection).
+        // GlobalShortcutExt::global_shortcut would panic without its state.
+        app.try_state::<GlobalShortcut<tauri::Wry>>()
+    }
     fn finish(app: &AppHandle) {
         if let Some(backend) = app.try_state::<Backend>() {
             let mut core = backend.core();
@@ -308,7 +617,9 @@ mod desktop {
             core.copy_dismissal.invalidate();
             core.lifecycle.reconcile();
         }
-        let _ = app.global_shortcut().unregister_all();
+        if let Some(manager) = shortcut_manager(app) {
+            let _ = manager.unregister_all();
+        }
         app.exit(0);
     }
     fn session_safe() -> bool {
@@ -661,7 +972,8 @@ mod desktop {
                 .map_err(|_| SHORTCUT_ERROR)?;
             let changed = old_shortcut != new_shortcut;
             if changed {
-                app.global_shortcut()
+                shortcut_manager(&app)
+                    .ok_or(SHORTCUT_ERROR)?
                     .register(new_shortcut)
                     .map_err(|_| SHORTCUT_ERROR)?;
                 registered_new = Some(new_shortcut);
@@ -704,13 +1016,17 @@ mod desktop {
                 backend.persist(&mut core);
             }
             if changed {
-                let _ = app.global_shortcut().unregister(old_shortcut);
+                if let Some(manager) = shortcut_manager(&app) {
+                    let _ = manager.unregister(old_shortcut);
+                }
             }
             Ok(())
         })();
         if result.is_err() {
             if let Some(shortcut) = registered_new {
-                let _ = app.global_shortcut().unregister(shortcut);
+                if let Some(manager) = shortcut_manager(&app) {
+                    let _ = manager.unregister(shortcut);
+                }
             }
         }
         backend.core().settings_busy = false;
@@ -771,6 +1087,67 @@ mod desktop {
             serde_json::json!({"state":core.snapshot(),"visible":core.visible,"syntheticClipboard":backend.synthetic_clipboard.lock().unwrap_or_else(|e|e.into_inner()).clone(),"dataDir":backend.storage.directory}),
         )
     }
+    #[cfg(any(debug_assertions, feature = "smoke-test"))]
+    #[tauri::command]
+    async fn smoke_geometry(app: AppHandle, window: WebviewWindow) -> Result<Value, String> {
+        authorize_smoke(&app, &window)?;
+        let (placement, visible) = {
+            let backend = app.state::<Backend>();
+            let core = backend.core();
+            (core.placement.clone(), core.visible)
+        };
+        // Never hold Core while asking the native event loop for window data.
+        let inner_position = window
+            .inner_position()
+            .ok()
+            .map(|p| Point { x: p.x, y: p.y });
+        let outer_position = window
+            .outer_position()
+            .ok()
+            .map(|p| Point { x: p.x, y: p.y });
+        let inner_size = window.inner_size().ok().map(|s| Extent {
+            width: s.width,
+            height: s.height,
+        });
+        let outer_size = window.outer_size().ok().map(|s| Extent {
+            width: s.width,
+            height: s.height,
+        });
+        let scale = window.scale_factor().ok();
+        let supported = matches!(placement.backend, "x11" | "native");
+        let area = placement
+            .monitor
+            .as_ref()
+            .and_then(MonitorGeometry::usable_area);
+        let error = match (area, outer_position, outer_size) {
+            (Some(a), Some(p), Some(s)) => Some(geometry::right_edge_error(a, p, s)),
+            _ => None,
+        };
+        let actual_matches = match (
+            area,
+            placement.requested,
+            outer_position,
+            outer_size,
+            inner_size,
+        ) {
+            (Some(a), Some(d), Some(p), Some(o), Some(i)) => {
+                geometry::placement_matches(a, d, p, o, i)
+            }
+            _ => false,
+        };
+        let still_current = {
+            let backend = app.state::<Backend>();
+            let core = backend.core();
+            core.visible && core.placement.generation == placement.generation
+        };
+        Ok(serde_json::json!({
+            "backend":placement.backend,"positioningSupported":supported,"visible":visible,
+            "generation":placement.generation,"selectedMonitor":placement.monitor,"requested":placement.requested,
+            "actual":{"outerPosition":outer_position,"outerSize":outer_size,"innerPosition":inner_position,"innerSize":inner_size,"scaleFactor":scale},
+            "rightEdgeErrorPx":error,"ready":supported&&still_current&&actual_matches,"lastError":placement.last_error,
+            "placementAttempts":placement.attempts
+        }))
+    }
     #[cfg(feature = "smoke-test")]
     #[tauri::command]
     async fn smoke_native_clipboard_roundtrip(
@@ -803,10 +1180,19 @@ mod desktop {
         })())
     }
     pub fn run() {
+        // Must run before GTK/Tauri starts any threads or initializes a display.
+        // This selects only this process's backend and respects explicit choices.
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("GDK_BACKEND").is_none() {
+            if let Some(preference) =
+                geometry::linux_backend_preference(std::env::var("DISPLAY").ok().as_deref(), None)
+            {
+                std::env::set_var("GDK_BACKEND", preference);
+            }
+        }
         let builder=tauri::Builder::default()
             .plugin(tauri_plugin_single_instance::init(|app,_,_|show(app)))
             .plugin(tauri_plugin_clipboard_manager::init())
-            .plugin(tauri_plugin_global_shortcut::Builder::new().with_handler(|app,_,event|{if event.state()==ShortcutState::Pressed{toggle(app);}}).build())
             .on_permission_request(|_,_|tauri::webview::PermissionResponse::Deny)
             .on_window_event(|window,event|{
                 if window.label()!="main"{return;}
@@ -820,7 +1206,7 @@ mod desktop {
                             if current&&ui.get_webview_window("main").is_some_and(|w|!w.is_focused().unwrap_or(true)){hide_now(&ui);}
                         });});}
                     },
-                    WindowEvent::ScaleFactorChanged{..}=>{if backend.core().visible{if let Some(window)=app.get_webview_window("main"){position_window(&window);}}},
+                    WindowEvent::ScaleFactorChanged{..}|WindowEvent::Resized(_)|WindowEvent::Moved(_)=>{schedule_placement_check(app);},
                     _=>(),
                 }
             })
@@ -832,15 +1218,21 @@ mod desktop {
                 let mut history=History::new(loaded.settings.history_limit);history.restore(&loaded.entries,now_ms());let mut warning=loaded.warning;
                 if storage.save_settings(&loaded.settings).is_err(){warning=Some("設定を保存できませんでした。この起動中はメモリだけで動作します。".into());}
                 let wayland=cfg!(target_os="linux")&&(std::env::var_os("WAYLAND_DISPLAY").is_some()||std::env::var("XDG_SESSION_TYPE").as_deref()==Ok("wayland"));
-                let status=Status{shortcut_registered:false,storage_warning:warning,platform:if cfg!(target_os="macos"){"darwin"}else if cfg!(target_os="windows"){"win32"}else{"linux"},wayland,version:app.package_info().version.to_string()};
-                app.manage(Backend{core:Mutex::new(Core{history,settings:loaded.settings,lifecycle:CaptureLifecycle::default(),copy_dismissal:CopyDismissal::default(),status,settings_busy:false,source_busy:false,visible:false,shown_at:Instant::now(),blur_generation:0,snapshot_revision:0}),storage,synthetic,synthetic_clipboard:Mutex::new(None),_test_directory:test_directory});
+                let status=Status{shortcut_registered:false,shortcut_available:false,storage_warning:warning,position_warning:None,platform:if cfg!(target_os="macos"){"darwin"}else if cfg!(target_os="windows"){"win32"}else{"linux"},wayland,version:app.package_info().version.to_string()};
+                app.manage(Backend{core:Mutex::new(Core{history,settings:loaded.settings,lifecycle:CaptureLifecycle::default(),copy_dismissal:CopyDismissal::default(),placement:PlacementState::default(),status,settings_busy:false,source_busy:false,visible:false,shown_at:Instant::now(),blur_generation:0,snapshot_revision:0}),storage,synthetic,synthetic_clipboard:Mutex::new(None),_test_directory:test_directory});
                 let config=app.config().app.windows.iter().find(|w|w.label=="main").ok_or("Missing main window configuration")?;
                 let dev_url=app.config().build.dev_url.clone();
                 tauri::WebviewWindowBuilder::from_config(app,config)?.on_navigation(move|url|local_url(url,dev_url.as_ref()))
                     .on_new_window(|_,_|tauri::webview::NewWindowResponse::Deny).build()?;
                 #[cfg(target_os="macos")] app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 let handle=app.handle();let backend=handle.state::<Backend>();let shortcut=backend.core().settings.shortcut.clone();
-                let shortcut_registered=handle.global_shortcut().register(shortcut.as_str()).is_ok();backend.core().status.shortcut_registered=shortcut_registered;
+                // Linux global-hotkey requires an X11 connection even when GTK
+                // can open a Wayland window. Treat absence as a feature warning,
+                // never a fatal startup error that prevents the tray/UI opening.
+                let shortcut_available=handle.plugin(tauri_plugin_global_shortcut::Builder::new()
+                    .with_handler(|app,_,event|{if event.state()==ShortcutState::Pressed{toggle(app);}}).build()).is_ok();
+                let shortcut_registered=shortcut_available&&shortcut_manager(handle).is_some_and(|manager|manager.register(shortcut.as_str()).is_ok());
+                {let mut core=backend.core();core.status.shortcut_available=shortcut_available;core.status.shortcut_registered=shortcut_registered;}
                 let tray_result=(||->tauri::Result<tauri::tray::TrayIcon>{
                     let bytes=if cfg!(target_os="macos"){include_bytes!("../../assets/trayTemplate.png").as_slice()}else{include_bytes!("../../assets/tray.png").as_slice()};
                     TrayIconBuilder::with_id("pupa-tray").icon(tauri::image::Image::from_bytes(bytes)?).icon_as_template(cfg!(target_os="macos"))
@@ -854,6 +1246,13 @@ mod desktop {
                 // stay off the GUI thread (required by the Linux clipboard plugin).
                 if synthetic { poll(handle); }
                 if first_run||tray_result.is_err()||!shortcut_registered||synthetic{show_now(handle);}
+                // Work-area changes (panels, resolution, disconnected displays)
+                // need not generate a window resize. Only query them while shown.
+                { let handle=handle.clone();thread::spawn(move||loop {
+                    thread::sleep(Duration::from_secs(1));
+                    let (visible,quitting)={let backend=handle.state::<Backend>();let core=backend.core();(core.visible,core.lifecycle.quitting)};
+                    if quitting{break;}if visible{schedule_placement_check(&handle);}
+                }); }
                 if !synthetic {
                     let handle=handle.clone();thread::spawn(move||{
                         poll(&handle); // Baseline only, before collection starts.
@@ -882,6 +1281,7 @@ mod desktop {
             smoke_tick,
             smoke_toggle,
             smoke_state,
+            smoke_geometry,
             smoke_native_clipboard_roundtrip
         ]);
         #[cfg(all(debug_assertions, not(feature = "smoke-test")))]
@@ -899,7 +1299,8 @@ mod desktop {
             smoke_set_clipboard,
             smoke_tick,
             smoke_toggle,
-            smoke_state
+            smoke_state,
+            smoke_geometry
         ]);
         #[cfg(all(not(debug_assertions), not(feature = "smoke-test")))]
         let builder = builder.invoke_handler(tauri::generate_handler![
@@ -933,7 +1334,9 @@ mod desktop {
                     core.lifecycle.quitting = true;
                     core.lifecycle.reconcile();
                 }
-                let _ = app.global_shortcut().unregister_all();
+                if let Some(manager) = shortcut_manager(app) {
+                    let _ = manager.unregister_all();
+                }
             }
             _ => (),
         });

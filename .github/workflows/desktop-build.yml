@@ -71,7 +71,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb webkit2gtk-driver dbus-x11
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb webkit2gtk-driver dbus-x11 x11-utils ffmpeg
       - name: Install locked npm dependencies
         run: npm ci
       - name: Run Rust core and frontend bridge tests
@@ -94,12 +94,51 @@ jobs:
       - name: Build synthetic-only native smoke binary
         if: runner.os == 'Linux'
         run: npm run tauri -- build --debug --no-bundle --features smoke-test --target ${{ matrix.target }} -- --locked
-      - name: Smoke-test real Tauri in isolated Linux desktop
+      - name: Smoke-test Tauri on a standard physical X11 desktop
+        id: native-standard
+        continue-on-error: true
         if: runner.os == 'Linux'
         env:
           WEBKIT_DISABLE_DMABUF_RENDERER: '1'
           PUPA_ISOLATED_DESKTOP: '1'
-        run: xvfb-run -a -s '-screen 0 1440x1000x24' dbus-run-session -- npm run test:native -- src-tauri/target/${{ matrix.target }}/debug/pupa
+          GDK_SCALE: '1'
+          PUPA_DESKTOP_SCENARIO: standard
+          PUPA_SCREEN_WIDTH: '1440'
+          PUPA_SCREEN_HEIGHT: '1000'
+        # Exercise Pupa's default X11 preference rather than selecting it here.
+        run: env -u GDK_BACKEND xvfb-run -a -s '-screen 0 1440x1000x24 -dpi 96' dbus-run-session -- npm run test:native -- src-tauri/target/${{ matrix.target }}/debug/pupa
+      - name: Verify actual right-edge placement on an ultrawide desktop
+        id: native-ultrawide
+        continue-on-error: true
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          PUPA_ISOLATED_DESKTOP: '1'
+          PUPA_SMOKE_POSITION_ONLY: '1'
+          PUPA_ARTIFACT_DIR: artifacts/native-ultrawide
+          PUPA_DESKTOP_SCENARIO: ultrawide
+          PUPA_SCREEN_WIDTH: '3440'
+          PUPA_SCREEN_HEIGHT: '1440'
+          TAURI_DRIVER_PORT: '4454'
+          GDK_BACKEND: x11
+          GDK_SCALE: '1'
+        run: xvfb-run -a -s '-screen 0 3440x1440x24 -dpi 96' dbus-run-session -- npm run test:native -- src-tauri/target/${{ matrix.target }}/debug/pupa
+      - name: Verify actual right-edge placement with GTK 2x HiDPI scaling
+        id: native-hidpi
+        continue-on-error: true
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          PUPA_ISOLATED_DESKTOP: '1'
+          PUPA_SMOKE_POSITION_ONLY: '1'
+          PUPA_ARTIFACT_DIR: artifacts/native-hidpi
+          PUPA_DESKTOP_SCENARIO: hidpi-2x
+          PUPA_SCREEN_WIDTH: '2880'
+          PUPA_SCREEN_HEIGHT: '1800'
+          TAURI_DRIVER_PORT: '4464'
+          GDK_BACKEND: x11
+          GDK_SCALE: '2'
+        run: xvfb-run -a -s '-screen 0 2880x1800x24 -dpi 96' dbus-run-session -- npm run test:native -- src-tauri/target/${{ matrix.target }}/debug/pupa
       - name: Upload UI and native Tauri evidence
         if: always() && runner.os == 'Linux'
         uses: actions/upload-artifact@v7
@@ -113,6 +152,11 @@ jobs:
       # diagnostics so one failing browser assertion does not hide native issues.
       - name: Require passing browser UI checks
         if: runner.os == 'Linux' && steps.browser-ui.outcome != 'success'
+        run: exit 1
+      # Keep failed native geometry checks fatal after collecting independent
+      # standard, ultrawide, and 2x evidence. Xvfb is not a multi-monitor claim.
+      - name: Require passing native desktop checks
+        if: runner.os == 'Linux' && (steps.native-standard.outcome != 'success' || steps.native-ultrawide.outcome != 'success' || steps.native-hidpi.outcome != 'success')
         run: exit 1
       - name: Package production desktop apps (no smoke feature, no signing credentials)
         if: runner.os != 'macOS'

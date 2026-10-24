@@ -45,6 +45,7 @@ const search = $<HTMLInputElement>('#search');
 const settingsDialog = $<HTMLDialogElement>('#settings-dialog');
 const clearDialog = $<HTMLDialogElement>('#clear-dialog');
 let state: State | null = null;
+let renderedViewport = { width: 0, height: 0 };
 let filter = 'all';
 let selectedId: string | null = null;
 let hoverId: string | null = null;
@@ -60,6 +61,7 @@ let pageOffset = 0;
 let copying = false;
 let copyEpoch = 0;
 let pendingDismissToken: string | null = null;
+let copyAfterimage: HTMLDivElement | null = null;
 let dismissTimer: ReturnType<typeof setTimeout> | undefined;
 let copiedId: string | null = null;
 let animateNext = true;
@@ -89,7 +91,13 @@ function timeAgo(timestamp: number) {
   if (minutes < 2880) return '昨日';
   return new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric' }).format(timestamp);
 }
-function capacity() { return window.innerHeight < 600 ? 5 : 7; }
+function measureFanViewport() {
+  // These are CSS pixels in the actual webview, not physical monitor pixels.
+  // Native code positions that webview against the monitor's work-area edge.
+  const bounds = stage.getBoundingClientRect();
+  return { width: bounds.width || window.innerWidth, height: bounds.height || window.innerHeight };
+}
+function capacity() { return measureFanViewport().height < 600 ? 5 : 7; }
 function showToast(message: string, isError = false) {
   clearTimeout(toastTimer);
   const toast = $('#toast'); toast.replaceChildren(); addIcon(toast, isError ? 'close' : 'check'); toast.append(make('span', '', message));
@@ -149,8 +157,27 @@ function pointAtCard(id: string | null) {
 function isUtilityTarget(target: Element | null) {
   return !!target?.closest('dialog, .search-popover, .preview-controls, .preview-launcher, .empty-state, .toast');
 }
+function clearCopyAfterimage() { copyAfterimage?.remove(); copyAfterimage = null; }
+function showCopyAfterimage(id: string) {
+  clearCopyAfterimage();
+  const region = cardRegions.find(candidate => candidate.id === id);
+  const slot = Array.from(deck.querySelectorAll<HTMLElement>('.card-slot')).find(candidate => candidate.dataset.id === id);
+  const card = slot?.querySelector<HTMLElement>('.clip-card');
+  if (!region || !card) return;
+  const bounds = card.getBoundingClientRect();
+  const stageBounds = stage.getBoundingClientRect();
+  const ghost = make('div', 'copy-afterimage');
+  ghost.dataset.testid = 'copy-afterimage'; ghost.setAttribute('aria-hidden', 'true');
+  // A fresh, empty silhouette only. Never clone clipboard text, source icons,
+  // controls, or accessibility content into the lingering afterimage.
+  ghost.style.width = `${region.width}px`; ghost.style.height = `${region.height}px`;
+  ghost.style.left = `${(bounds.left + bounds.right) / 2 - stageBounds.left - region.width / 2}px`;
+  ghost.style.top = `${(bounds.top + bounds.bottom) / 2 - stageBounds.top - region.height / 2}px`;
+  ghost.style.transform = `rotate(${region.expandedAngle}deg) scale(${region.scale})`;
+  stage.append(ghost); copyAfterimage = ghost;
+}
 function cancelCopyFeedback() {
-  copyEpoch++; clearTimeout(dismissTimer); dismissTimer = undefined;
+  copyEpoch++; clearTimeout(dismissTimer); dismissTimer = undefined; clearCopyAfterimage();
   pendingDismissToken = null; copying = false; copiedId = null; clearTimeout(copiedTimer);
   stage.classList.remove('is-copy-dismiss', 'is-copy-dismissed');
   deck.querySelectorAll('.is-copy-confirmed').forEach(slot => slot.classList.remove('is-copy-confirmed'));
@@ -158,7 +185,7 @@ function cancelCopyFeedback() {
 }
 async function finishCopyDismissal(token: string, epoch: number) {
   if (epoch !== copyEpoch || pendingDismissToken !== token) return;
-  stage.classList.add('is-copy-dismissed');
+  clearCopyAfterimage(); stage.classList.add('is-copy-dismissed');
   try {
     const result = await bridge.completeCopyDismissal(token);
     if (epoch !== copyEpoch || pendingDismissToken !== token) return;
@@ -184,8 +211,10 @@ async function copyEntry(entry: ClipboardEntry) {
     if (!result.dismissToken) return;
     pendingDismissToken = result.dismissToken; copiedId = entry.id; renderCards();
     if (preview) showToast('プレビュー: 実際のコピーは行いません');
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!reducedMotion) showCopyAfterimage(entry.id);
     stage.classList.add('is-copy-dismiss'); $('#fan-viewport').inert = true;
-    const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 260;
+    const duration = reducedMotion ? 0 : 420;
     dismissTimer = setTimeout(() => { void finishCopyDismissal(result.dismissToken!, epoch); }, duration);
   } catch {
     if (epoch === copyEpoch) showToast('アプリとの接続を確認してください。', true);
@@ -206,7 +235,8 @@ function changePage(direction: number, focus = false) {
   if (focus && shownEntries.length) selectCard(direction > 0 ? shownEntries.at(-1)!.id : shownEntries[0].id, true);
 }
 function fanGeometry(count: number) {
-  const width = window.innerWidth; const height = window.innerHeight;
+  const { width, height } = measureFanViewport();
+  renderedViewport = { width, height };
   const compact = width <= 560;
   const margin = compact ? 12 : 18;
   const configuredSpread = draftFan?.fanSpread ?? state?.settings.fanSpread ?? 72;
@@ -325,7 +355,7 @@ function renderCards() {
     }
     bottomTools.append(cardAction('search', '履歴を検索', 'search', openSearch));
     const settings = cardAction('settings', '設定を開く', 'settings', openSettings); settings.dataset.testid = 'settings-button';
-    const warning = !state!.status.shortcutRegistered || !!state!.status.storageWarning;
+    const warning = !state!.status.shortcutRegistered || !!state!.status.storageWarning || !!state!.status.positionWarning;
     settings.classList.toggle('has-warning', warning); settings.classList.toggle('is-paused', state!.paused);
     bottomTools.append(settings, cardAction(copiedId === entry.id ? 'check' : 'copy', copiedId === entry.id ? 'コピー済み' : 'コピー', 'copy-icon', () => { void copyEntry(entry); }));
     card.append(bottomTools); slot.append(card); deck.append(slot);
@@ -357,12 +387,14 @@ function renderCards() {
 function renderSettingsStatus() {
   if (!state) return;
   const status = $('#settings-status'); status.replaceChildren();
-  if (!state.status.shortcutRegistered) status.append(make('p', 'form-error', 'ショートカットを登録できませんでした。別のキーをお試しください。'));
+  if (state.status.shortcutAvailable === false) status.append(make('p', 'form-error', 'この環境ではグローバルショートカットを利用できません。トレイメニューまたはアプリのランチャーからPupaを開いてください。'));
+  else if (!state.status.shortcutRegistered) status.append(make('p', 'form-error', 'ショートカットを登録できませんでした。別のキーをお試しください。'));
   if (state.status.storageWarning) status.append(make('p', 'form-error', state.status.storageWarning));
+  if (state.status.positionWarning) status.append(make('p', 'form-error', state.status.positionWarning));
   $('#pause-button').textContent = state.paused ? '記録を再開' : '一時停止';
   $('#pause-button').setAttribute('aria-pressed', String(state.paused));
   $<HTMLButtonElement>('#clear-history-button').disabled = !state.entries.length;
-  $('#empty-settings').classList.toggle('has-warning', !state.status.shortcutRegistered || !!state.status.storageWarning);
+  $('#empty-settings').classList.toggle('has-warning', !state.status.shortcutRegistered || !!state.status.storageWarning || !!state.status.positionWarning);
   if (settingsDialog.open) updateHistoryWarning();
 }
 function render() {
@@ -533,12 +565,21 @@ document.addEventListener('keydown', (event) => {
     const selected = shownEntries.find((entry) => entry.id === selectedId); if (selected) { event.preventDefault(); void copyEntry(selected); }
   } else if (event.key === 'PageDown' || event.key === 'PageUp') { event.preventDefault(); changePage(event.key === 'PageDown' ? capacity() : -capacity(), true); }
 });
-window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => renderCards(), 80); });
+function scheduleFanLayout() { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => renderCards(), 80); }
+window.addEventListener('resize', scheduleFanLayout);
+// Work-area changes and webview relayouts can update the drawable stage without
+// a distinct window resize event. Re-measure only when its dimensions change.
+const viewportObserver = new ResizeObserver(() => {
+  const next = measureFanViewport();
+  if (!state || (next.width === renderedViewport.width && next.height === renderedViewport.height)) return;
+  scheduleFanLayout();
+});
+viewportObserver.observe(stage);
 const applyState = createStateReceiver((next) => { state = next; render(); });
 const unsubscribeState = bridge.onState(applyState);
 const unsubscribeShown = bridge.onShown(resetForShown);
 const unsubscribeSettings = bridge.onSettings?.(() => { cancelCopyFeedback(); openSettings(); }) ?? (() => {});
-window.addEventListener('pagehide', () => { cancelCopyFeedback(); unsubscribeState(); unsubscribeShown(); unsubscribeSettings(); clearTimeout(toastTimer); clearTimeout(copiedTimer); clearTimeout(previewTimer); clearTimeout(resizeTimer); }, { once: true });
+window.addEventListener('pagehide', () => { viewportObserver.disconnect(); cancelCopyFeedback(); unsubscribeState(); unsubscribeShown(); unsubscribeSettings(); clearTimeout(toastTimer); clearTimeout(copiedTimer); clearTimeout(previewTimer); clearTimeout(resizeTimer); }, { once: true });
 void bridge.getState().then((next) => { applyState(next); stage.focus({ preventScroll: true }); }).catch(() => {
   $('#empty-state').hidden = false; $('#empty-label').textContent = '履歴を読み込めませんでした'; showToast('Pupaを再起動してください。', true);
 });

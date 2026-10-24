@@ -2797,9 +2797,10 @@ dependencies = [
 
 [[package]]
 name = "pupa"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64 0.22.1",
+ "raw-window-handle",
  "regex",
  "serde",
  "serde_json",

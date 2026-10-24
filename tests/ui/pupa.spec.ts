@@ -193,6 +193,7 @@ for (const viewport of [
     for (const rect of bounds) {
       expect(rect.left).toBeGreaterThanOrEqual(10);
       expect(rect.right).toBeLessThanOrEqual(viewport.width - 10);
+      expect(rect.right).toBeCloseTo(viewport.width - (viewport.width <= 560 ? 12 : 18), 1);
       expect(rect.top).toBeGreaterThanOrEqual(10);
       expect(rect.bottom).toBeLessThanOrEqual(viewport.height - 10);
     }
@@ -458,7 +459,7 @@ const installDismissalFixture = async (page: import('@playwright/test').Page) =>
         if (control.fail) return { ok: false, error: 'Synthetic write failure' };
         control.successAt = performance.now(); return control.tokenless ? { ok: true } : { ok: true, dismissToken: token };
       },
-      completeCopyDismissal: async (token: string) => { control.completions.push(token); control.completeAt = performance.now(); return { ok: true }; },
+      completeCopyDismissal: async (token: string) => { control.completions.push(token); control.completeAt = performance.now(); return control.completeFail ? { ok: false, error: 'Synthetic dismissal failure' } : { ok: true }; },
     };
   });
 };
@@ -487,9 +488,10 @@ test('failed and token-less copies never animate or issue a hide', async ({ page
   await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
   await expect(page.getByTestId('fan-card')).toBeVisible();
   await page.evaluate(() => { (window as any).dismissal.fail = false; (window as any).dismissal.tokenless = true; });
-  await page.keyboard.press('Enter'); await page.waitForTimeout(350);
+  await page.keyboard.press('Enter'); await page.waitForTimeout(600);
   await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
   expect(await page.evaluate(() => (window as any).dismissal.completions)).toEqual([]);
+  await expect(page.getByTestId('copy-afterimage')).toHaveCount(0);
   expect(await page.evaluate(() => (window as any).dismissal.hides)).toBe(0);
 });
 
@@ -500,15 +502,17 @@ test('Escape cancels copy animation immediately and reopening cancels its old ti
   await page.keyboard.press('Escape');
   expect(await page.evaluate(() => (window as any).dismissal.hides)).toBe(1);
   await page.evaluate(() => (window as any).dismissal.show());
-  await page.waitForTimeout(350);
+  await page.waitForTimeout(600);
   await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
   expect(await page.evaluate(() => (window as any).dismissal.completions)).toEqual([]);
+  await expect(page.getByTestId('copy-afterimage')).toHaveCount(0);
   await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
   await expect(page.locator('.fan-stage')).toHaveClass(/is-copy-dismiss/);
   await page.evaluate(() => (window as any).dismissal.show());
-  await page.waitForTimeout(350);
+  await page.waitForTimeout(600);
   await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
   expect(await page.evaluate(() => (window as any).dismissal.completions)).toEqual([]);
+  await expect(page.getByTestId('copy-afterimage')).toHaveCount(0);
 });
 
 test('late old write cannot animate a reopened window or unlock a newer copy', async ({ page }) => {
@@ -532,6 +536,7 @@ test('reduced motion completes copy dismissal without moving or flashing the han
   expect(await page.evaluate(() => (window as any).dismissal.completeAt - (window as any).dismissal.successAt)).toBeLessThan(200);
   expect(await page.locator('.fan-viewport').evaluate(el => getComputedStyle(el).animationName)).toBe('none');
   expect(await page.getByTestId('fan-card').evaluate(el => getComputedStyle(el).animationName)).toBe('none');
+  await expect(page.getByTestId('copy-afterimage')).toHaveCount(0);
 });
 
 test('record actual pointer copy, rightward dismissal, and preview reopening', async ({ browser }) => {
@@ -550,5 +555,100 @@ test('record actual pointer copy, rightward dismissal, and preview reopening', a
   await expect(page.locator('#preview-launcher')).toBeVisible(); await page.waitForTimeout(600);
   await page.locator('#preview-launcher').click(); await expect(cards(page)).toHaveCount(5); await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
   await page.waitForTimeout(1000);
+  const reopenedPoints = await restingHandPoints(page);
+  await page.mouse.move(reopenedPoints[0].x, reopenedPoints[0].y, { steps: 12 });
+  await expect(page.locator('.card-slot.is-expanded')).toHaveAttribute('data-id', reopenedPoints[0].id);
+  await page.waitForTimeout(400); await page.mouse.click(reopenedPoints[0].x, reopenedPoints[0].y);
+  await expect(page.locator('#preview-launcher')).toBeVisible(); await page.waitForTimeout(700);
   const video = page.video(); await context.close(); await video?.saveAs('artifacts/pupa-copy-dismissal.webm');
 });
+
+
+for (const deviceScaleFactor of [1, 1.25, 2]) {
+  test(`right-edge geometry follows actual webview dimensions at DPR ${deviceScaleFactor}`, async ({ browser }) => {
+    const context = await browser.newContext({ viewport: { width: 780, height: 900 }, deviceScaleFactor, reducedMotion: 'reduce' });
+    const page = await context.newPage(); await page.goto('http://127.0.0.1:5173/'); await expect(cards(page)).toHaveCount(5);
+    for (const viewport of [{ width: 780, height: 900 }, { width: 1920, height: 1080 }, { width: 3440, height: 1440 }, { width: 390, height: 640 }]) {
+      await page.setViewportSize(viewport);
+      await expect.poll(() => page.getByTestId('fan-card').evaluateAll(elements => elements.every(el => Math.abs(el.getBoundingClientRect().right - innerWidth + (innerWidth <= 560 ? 12 : 18)) < .1))).toBeTruthy();
+      const stage = await page.locator('.fan-stage').boundingBox();
+      expect(stage).toEqual({ x: 0, y: 0, width: viewport.width, height: viewport.height });
+      expect(await page.evaluate(() => devicePixelRatio)).toBe(deviceScaleFactor);
+    }
+    // The renderer measures its actual drawable stage rather than accidentally
+    // mixing screen.width (physical display) with webview CSS pixels.
+    await page.locator('.fan-stage').evaluate(el => { (el as HTMLElement).style.width = '360px'; });
+    await expect.poll(() => page.getByTestId('fan-card').evaluateAll(elements => elements.every(el => Math.abs(el.getBoundingClientRect().right - 348) < .1))).toBeTruthy();
+    await context.close();
+  });
+}
+
+test('successful copy visibly pulses and leaves only an empty pose afterimage during retraction', async ({ page }) => {
+  await installDismissalFixture(page); await page.goto('/'); await expect(cards(page)).toHaveCount(1);
+  await page.keyboard.press('ArrowDown');
+  await page.evaluate(() => {
+    const control = (window as any).dismissal; control.defer = true; control.pulseFrames = [];
+    const start = performance.now();
+    const sample = () => {
+      const stage = document.querySelector('.fan-stage')!;
+      const card = document.querySelector('.clip-card')!;
+      const hand = document.querySelector('.fan-viewport')!;
+      if (stage.classList.contains('is-copy-dismiss')) {
+        const face = getComputedStyle(card), view = getComputedStyle(hand);
+        const matrix = view.transform === 'none' ? null : new DOMMatrixReadOnly(view.transform);
+        const ghost = document.querySelector<HTMLElement>('.copy-afterimage');
+        const ghostRect = ghost?.getBoundingClientRect();
+        control.pulseFrames.push({ color: face.backgroundColor, border: face.borderTopColor, shadow: face.boxShadow, opacity: Number(view.opacity), x: matrix?.m41 ?? 0, ghostOpacity: ghost ? Number(getComputedStyle(ghost).opacity) : 0, ghostText: ghost?.textContent ?? '', ghostChildren: ghost?.childElementCount ?? 0, ghostX: ghostRect?.x, ghostY: ghostRect?.y });
+      }
+      if (performance.now() - start < 1200) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
+  await page.evaluate(() => (window as any).dismissal.resolve());
+  await expect.poll(() => page.evaluate(() => (window as any).dismissal.completions)).toEqual(['dismiss-1']);
+  const frames = await page.evaluate(() => (window as any).dismissal.pulseFrames as Array<{ color: string; border: string; shadow: string; opacity: number; x: number; ghostOpacity: number; ghostText: string; ghostChildren: number; ghostX?: number; ghostY?: number }>);
+  const lit = frames.filter(frame => { const color = frame.color.match(/[\d.]+/g)?.map(Number) ?? []; return color[0] >= 200 && color[1] >= 245 && color[2] >= 240; });
+  expect(lit.length).toBeGreaterThanOrEqual(2);
+  expect(lit.some(frame => frame.x < 1 && frame.opacity > .99 && frame.border === 'rgb(255, 255, 255)' && frame.shadow.includes('4px'))).toBeTruthy();
+  expect(frames.some(frame => frame.x > 20 && frame.opacity < .95)).toBeTruthy();
+  expect(frames.some(frame => frame.opacity < .05 && frame.ghostOpacity > .03)).toBeTruthy();
+  const ghostFrames = frames.filter(frame => frame.ghostOpacity > .01);
+  expect(ghostFrames.length).toBeGreaterThanOrEqual(4);
+  expect(ghostFrames.every(frame => frame.ghostText === '' && frame.ghostChildren === 0)).toBeTruthy();
+  expect(new Set(ghostFrames.map(frame => `${frame.ghostX},${frame.ghostY}`)).size).toBe(1);
+  await expect(page.getByTestId('copy-afterimage')).toHaveCount(0);
+  const timing = await page.evaluate(() => (window as any).dismissal.completeAt - (window as any).dismissal.successAt);
+  expect(timing).toBeGreaterThanOrEqual(410); expect(timing).toBeLessThan(640);
+});
+
+
+test('dismissal failure removes the success afterimage and restores the usable hand', async ({ page }) => {
+  await installDismissalFixture(page); await page.goto('/'); await expect(cards(page)).toHaveCount(1);
+  await page.evaluate(() => { (window as any).dismissal.completeFail = true; });
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await expect(page.locator('#toast')).toContainText('ウィンドウを閉じられませんでした');
+  await expect(page.getByTestId('copy-afterimage')).toHaveCount(0);
+  await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
+  expect(await page.locator('.fan-viewport').evaluate(el => (el as HTMLElement).inert)).toBe(false);
+});
+
+
+for (const unavailable of [true, false]) {
+  test(`shortcut settings distinguish platform unavailability from key collision: ${unavailable}`, async ({ page }) => {
+    await page.addInitScript(unavailable => {
+      const state = { entries: [], settings: { shortcut: 'CommandOrControl+Shift+Space', historyLimit: 60, persistence: false }, paused: false, status: { shortcutRegistered: false, ...(unavailable ? { shortcutAvailable: false } : {}), storageWarning: null, platform: 'linux', wayland: true, version: 'shortcut-test' } };
+      (window as any).pupa = { getState: async () => state, onState: () => () => {}, onShown: () => () => {}, hide: () => {}, quit: () => {} };
+    }, unavailable);
+    await page.goto('/'); await expect(page.locator('#empty-settings')).toBeVisible(); await openSettings(page);
+    if (unavailable) {
+      await expect(page.locator('#settings-status')).toContainText('グローバルショートカットを利用できません');
+      await expect(page.locator('#settings-status')).toContainText('トレイメニューまたはアプリのランチャー');
+      await expect(page.locator('#settings-status')).not.toContainText('別のキー');
+    } else {
+      await expect(page.locator('#settings-status')).toContainText('別のキーをお試しください');
+      await expect(page.locator('#settings-status')).not.toContainText('グローバルショートカットを利用できません');
+    }
+  });
+}
