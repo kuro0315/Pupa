@@ -225,7 +225,11 @@ for (const viewport of [
     }
     await page.locator('.fan-stage').focus();
     await page.mouse.move(0, 0);
-    await page.getByTestId('copy-entry').last().hover();
+    // Hover follows the fixed hand region, not the animated button's changing
+    // center. Retrying locator.hover would chase the card after it pulls out.
+    const lastRestingPoint = (await restingHandPoints(page)).at(-1)!;
+    await page.mouse.move(lastRestingPoint.x, lastRestingPoint.y, { steps: 8 });
+    await expect(page.locator('.card-slot.is-expanded')).toHaveCount(1);
     await expect(cards(page).last()).toHaveClass(/is-expanded/);
     const hovered = await page.getByTestId('fan-card').last().boundingBox();
     expect(hovered!.y + hovered!.height).toBeLessThanOrEqual(viewport.height - 10);
@@ -418,3 +422,24 @@ for (const viewport of [{ width: 780, height: 900 }, { width: 780, height: 480 }
     expect(fontRequests.every(url => new URL(url).origin === new URL(page.url()).origin)).toBeTruthy();
   });
 }
+
+
+test('short-screen resting regions support a stable five-card sweep', async ({ page }) => {
+  await page.setViewportSize({ width: 780, height: 480 });
+  await installHandFixture(page, 5); await page.goto('/'); await expect(cards(page)).toHaveCount(5);
+  await page.waitForTimeout(1000);
+  const points = await restingHandPoints(page);
+  for (const point of [...points, ...points.slice(0, -1).reverse()]) {
+    await page.mouse.move(point.x, point.y, { steps: 8 });
+    await expect(page.locator('.card-slot.is-expanded')).toHaveCount(1);
+    await expect(page.locator('.card-slot.is-expanded')).toHaveAttribute('data-id', point.id);
+    await page.waitForTimeout(250);
+    await expect(page.locator('.card-slot.is-expanded')).toHaveAttribute('data-id', point.id);
+    const rect = await page.locator('.card-slot.is-expanded .clip-card').boundingBox();
+    expect(rect!.x).toBeGreaterThanOrEqual(10); expect(rect!.y).toBeGreaterThanOrEqual(10);
+    expect(rect!.x + rect!.width).toBeLessThanOrEqual(770); expect(rect!.y + rect!.height).toBeLessThanOrEqual(470);
+  }
+  expect(await page.evaluate(() => (window as any).handCopies)).toEqual([]);
+  expect(await page.evaluate(() => (window as any).handHidden)).toBe(0);
+  await page.mouse.move(2, 2); await expect(page.locator('.card-slot.is-expanded')).toHaveCount(0);
+});
