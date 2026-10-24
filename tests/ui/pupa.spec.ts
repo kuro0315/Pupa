@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
+const setRange = async (page: import('@playwright/test').Page, id: string, value: string) => { await page.locator(id).evaluate((el, value) => { (el as HTMLInputElement).value = value; el.dispatchEvent(new Event('input', {bubbles:true})); }, value); };
 const cards = (page: import('@playwright/test').Page) => page.getByTestId('clipboard-card');
 const openSettings = async (page: import('@playwright/test').Page) => { await page.keyboard.press(','); await expect(page.getByTestId('settings-dialog')).toBeVisible(); };
 
@@ -111,4 +112,60 @@ test('untrusted clipboard text is plain text with no remote request', async ({ p
   await expect(page.locator('.card-content img')).toHaveCount(0); expect(outbound).toEqual([]);
   expect(await page.evaluate(()=>(window as any).hacked)).toBeUndefined();
   expect(await page.locator('.fan-stage').evaluate(el=>getComputedStyle(el).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
+});
+
+test('card gear never copies; fan controls preview, cancel and persist', async ({ page }) => {
+  await page.goto('/'); await page.keyboard.press('ArrowDown');
+  await page.getByTestId('settings-button').first().click();
+  await expect(page.getByTestId('settings-dialog')).toBeVisible();
+  await expect(page.locator('#preview-launcher')).toBeHidden();
+  const before = await cards(page).first().getAttribute('style');
+  await setRange(page, '#fan-spread', '30'); await setRange(page, '#fan-distance', '24');
+  expect(await cards(page).first().getAttribute('style')).not.toBe(before);
+  await page.getByRole('button', {name:'キャンセル', exact:true}).click();
+  await openSettings(page); await expect(page.locator('#fan-spread')).toHaveValue('42');
+  await expect(page.locator('#fan-distance')).toHaveValue('0');
+  await setRange(page, '#fan-spread', '35'); await setRange(page, '#fan-distance', '18');
+  await page.locator('#source-app').uncheck(); await page.locator('#save-settings').click();
+  await openSettings(page); await expect(page.locator('#fan-spread')).toHaveValue('35');
+  await expect(page.locator('#fan-distance')).toHaveValue('18'); await expect(page.locator('#source-app')).not.toBeChecked();
+  await page.screenshot({path:'artifacts/pupa-settings.png'});
+});
+
+test('source labels are explicitly estimated and icons are local-only', async ({page}) => {
+  await page.goto('/');
+  await expect(page.getByTestId('source-app-label').first()).toContainText('推定');
+  await expect(page.getByTestId('source-app-label').last()).toHaveText('アプリ不明');
+  await expect(page.getByTestId('source-watermark')).toHaveCount(5);
+  await expect(page.getByTestId('source-app-label').first()).toHaveAttribute('title', /保証するものではありません/);
+});
+
+test('lowering history cap requires acknowledgement including pins', async ({page}) => {
+  await page.addInitScript(() => {
+    const state:any = {entries:Array.from({length:35},(_,i)=>({id:`fixture-${i}`,text:`Synthetic ${i}`,kind:'text',color:'mint',createdAt:Date.now()-i,pinned:true})),settings:{shortcut:'CommandOrControl+Shift+Space',historyLimit:60,persistence:false,sourceApp:true,fanSpread:42,fanDistance:0},paused:false,status:{shortcutRegistered:true,storageWarning:null,platform:'linux',wayland:false,version:'test'}};
+    (window as any).updates=[];
+    (window as any).pupa = {getState:async()=>state,onState:()=>()=>{},onShown:()=>()=>{},hide:()=>{},quit:()=>{},updateSettings:async(s:any)=>{(window as any).updates.push(s);return{ok:true};}};
+  });
+  await page.goto('/'); await openSettings(page); await page.locator('#history-limit').selectOption('30');
+  await expect(page.locator('#history-reduction-warning')).toBeVisible();
+  await expect(page.locator('#history-reduction-description')).toContainText('ピン留め');
+  await page.locator('#save-settings').click(); await expect(page.getByTestId('settings-dialog')).toBeVisible();
+  expect(await page.evaluate(()=>(window as any).updates.length)).toBe(0);
+  await page.getByTestId('confirm-history-reduction').check(); await page.locator('#save-settings').click();
+  expect(await page.evaluate(()=>(window as any).updates[0].confirmHistoryReduction)).toBe(true);
+});
+
+test('copy failure retains visible card and exact text is selected on success', async ({page}) => {
+  await page.addInitScript(() => {
+    const state = {entries:[{id:'exact-entry',text:'  Exact\ntext\t🌙  ',kind:'text',color:'mint',createdAt:Date.now(),pinned:false}],settings:{shortcut:'CommandOrControl+Shift+Space',historyLimit:60,persistence:false},paused:false,status:{shortcutRegistered:true,storageWarning:null,platform:'linux',wayland:false,version:'test'}};
+    (window as any).hidden=0;(window as any).copied=[];(window as any).fail=true;
+    (window as any).pupa = {getState:async()=>state,onState:()=>()=>{},onShown:()=>()=>{},hide:()=>{(window as any).hidden++;},quit:()=>{},copyEntry:async(id:string)=>{(window as any).copied.push(id);return (window as any).fail?{ok:false,error:'Synthetic copy error'}:{ok:true};}};
+  });
+  await page.goto('/'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await expect(page.locator('#toast')).toContainText('Synthetic copy error');
+  expect(await page.evaluate(()=>(window as any).hidden)).toBe(0);
+  await expect(cards(page).first()).toBeVisible();
+  await page.evaluate(()=>(window as any).fail=false); await page.keyboard.press('Enter');
+  await expect.poll(()=>page.evaluate(()=>(window as any).hidden)).toBe(1);
+  expect(await page.evaluate(()=>(window as any).copied)).toEqual(['exact-entry','exact-entry']);
 });

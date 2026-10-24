@@ -23,7 +23,10 @@ app.innerHTML = `
     <form id="settings-form"><div class="dialog-heading"><div><h2 id="settings-title">設定</h2></div><button class="icon-button" type="button" data-close-dialog="settings-dialog" aria-label="設定を閉じる">${icon('close')}</button></div>
       <div id="settings-status" aria-live="polite"></div><div class="setting-row"><div><span class="setting-label">クリップボードの記録</span></div><button type="button" class="soft-button" id="pause-button">一時停止</button></div><div class="setting-group"><label class="setting-label" for="shortcut-input">呼び出すショートカット</label><div class="shortcut-field"><input id="shortcut-input" name="shortcut" spellcheck="false" autocomplete="off" required aria-describedby="shortcut-help"><button type="button" class="soft-button" id="record-shortcut">キーを記録</button></div><p class="field-help" id="shortcut-help">例: CommandOrControl+Shift+Space</p></div>
       <div class="setting-row"><div><label class="setting-label" for="history-limit">覚えておく枚数</label><p class="setting-description">ピン留めした手札も含めた上限です。</p></div><select id="history-limit" name="historyLimit"><option value="30">30 枚</option><option value="60">60 枚</option><option value="100">100 枚</option></select></div>
-      <label class="setting-row toggle-row"><span><span class="setting-label">コピーしたら、そっと閉じる</span><span class="setting-description">貼り付けは元のアプリで ⌘ / Ctrl + V。</span></span><input class="switch" id="hide-after-copy" type="checkbox" name="hideAfterCopy"><span class="toggle-track" aria-hidden="true"></span></label>
+      <div class="history-reduction-warning" id="history-reduction-warning" hidden><p id="history-reduction-description"></p><label><input id="confirm-history-reduction" data-testid="confirm-history-reduction" type="checkbox">削除される可能性を確認しました</label></div>
+      <div class="setting-row fan-setting"><div class="slider-heading"><label class="setting-label" for="fan-spread">カードの開く角度</label><output id="fan-spread-value" for="fan-spread">42°</output></div><input id="fan-spread" data-testid="fan-spread-setting" type="range" min="20" max="55" step="1" value="42"><div class="slider-labels"><span>せまく</span><span>広く</span></div></div>
+      <div class="setting-row fan-setting"><div class="slider-heading"><label class="setting-label" for="fan-distance">画面の端からの距離</label><output id="fan-distance-value" for="fan-distance">0 px</output></div><input id="fan-distance" data-testid="fan-distance-setting" type="range" min="0" max="90" step="1" value="0"><div class="slider-labels"><span>近く</span><span>遠く</span></div><p class="setting-description">画面に収まる範囲に調整されます。</p></div>
+      <label class="setting-row toggle-row"><span><span class="setting-label">収集時のアプリを記録（推定）</span><span class="setting-description">アプリ名とローカルのアイコンのみ。ウィンドウ名やURLは記録しません。</span></span><input class="switch" id="source-app" data-testid="source-app-setting" type="checkbox" name="sourceApp"><span class="toggle-track" aria-hidden="true"></span></label>
       <label class="setting-row toggle-row persistence-row"><span><span class="setting-label">次に開くときも、履歴を残す</span><span class="setting-description">オフなら、アプリ終了時に履歴が消えます。</span></span><input class="switch" id="persistence" type="checkbox" name="persistence" aria-describedby="persistence-warning"><span class="toggle-track" aria-hidden="true"></span></label>
       <p class="privacy-warning" id="persistence-warning">${icon('lock')}<span>オンにすると、コピーした内容を暗号化せずにこの端末へ保存します。パスワードなど、大切な情報の保存にはご注意ください。Pupaから外部への送信はしません。</span></p>
       <p class="platform-note" id="platform-note" hidden></p><p class="form-error" id="settings-error" role="alert" hidden></p>
@@ -51,6 +54,8 @@ let animateNext = true;
 let recording = false;
 let lastFocus: HTMLElement | null = null;
 let wheelTime = 0;
+let draftFan: { fanSpread: number; fanDistance: number } | null = null;
+let reductionScope = '';
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let copiedTimer: ReturnType<typeof setTimeout> | undefined;
 let previewTimer: ReturnType<typeof setTimeout> | undefined;
@@ -109,9 +114,10 @@ async function copyEntry(entry: ClipboardEntry) {
   try {
     if (!await mutate(() => bridge.copyEntry(entry.id))) return;
     copiedId = entry.id; clearTimeout(copiedTimer); renderCards();
-    if (preview || !state?.settings.hideAfterCopy) showToast(preview ? 'プレビュー: 実際のコピーは行いません' : 'コピーしました');
+    if (preview) showToast('プレビュー: 実際のコピーは行いません');
+    else bridge.hide();
     copiedTimer = setTimeout(() => { copiedId = null; renderCards(); }, 1700);
-    if (preview && state?.settings.hideAfterCopy) previewTimer = setTimeout(hidePreview, 550);
+    if (preview) previewTimer = setTimeout(hidePreview, 550);
   } finally { copying = false; }
 }
 function cardAction(name: keyof typeof icons, label: string, action: string, callback: () => void) {
@@ -126,11 +132,47 @@ function changePage(direction: number, focus = false) {
   pageOffset = next; hoverId = null; keyboardId = null; animateNext = false; renderCards();
   if (focus && shownEntries.length) selectCard(direction > 0 ? shownEntries.at(-1)!.id : shownEntries[0].id, true);
 }
+function fanGeometry() {
+  const configuredSpread = draftFan?.fanSpread ?? state?.settings.fanSpread ?? 42;
+  const configuredDistance = draftFan?.fanDistance ?? state?.settings.fanDistance ?? 0;
+  const width = window.innerWidth; const height = window.innerHeight;
+  const compact = width <= 560;
+  const cardWidth = compact ? Math.min(380, width - 66, height * .62) : Math.min(475, width - 74, height * .62, (width - 96) / 1.22 - 20);
+  const cardHeight = Math.min(compact ? 236 : 270, height * .32);
+  // The pivot remains at the screen edge. Distance increases the radial reach,
+  // so constrain it by the enlarged card's left edge as well as angle/height.
+  const maxDistance = compact ? 0 : Math.min(90, Math.max(0, (width - 76) / 1.22 - cardWidth - 20));
+  const distance = Math.min(Math.max(0, configuredDistance), maxDistance);
+  let angle = Math.max(20, Math.min(55, configuredSpread));
+  const radius = cardWidth + (compact ? 16 : 20) + distance;
+  const room = height / 2 - 17;
+  while (angle > 0 && radius * Math.sin(angle * Math.PI / 180) + cardHeight / 2 * Math.cos(angle * Math.PI / 180) > room) angle -= .25;
+  stage.style.setProperty('--fan-distance', `${distance.toFixed(2)}px`);
+  return { angle: Math.max(0, angle), distance };
+}
+function updateHistoryWarning() {
+  if (!state) return;
+  const limit = Number($<HTMLSelectElement>('#history-limit').value);
+  const count = state.entries.length;
+  const active = limit < count;
+  const scope = active ? `${limit}:${count}` : '';
+  const checkbox = $<HTMLInputElement>('#confirm-history-reduction');
+  if (scope !== reductionScope) checkbox.checked = false;
+  reductionScope = scope; checkbox.required = active;
+  $('#history-reduction-warning').hidden = !active;
+  $('#history-reduction-description').textContent = `現在${count}件あります。${limit}件に減らすと、古い履歴（ピン留めを含む）が削除される場合があります。元に戻せません。`;
+}
+function updateFanDraft() {
+  draftFan = { fanSpread: Number($<HTMLInputElement>('#fan-spread').value), fanDistance: Number($<HTMLInputElement>('#fan-distance').value) };
+  $('#fan-spread-value').textContent = `${draftFan.fanSpread}°`; $('#fan-distance-value').textContent = `${draftFan.fanDistance} px`; renderCards();
+}
 function renderCards() {
   if (!state) return;
   const focused = document.activeElement as HTMLElement | null;
   const focusedSlot = focused?.closest<HTMLElement>('.card-slot');
   const focusedAction = focused?.dataset.action;
+  const retainedKeyboardId = focusedSlot?.dataset.id ?? keyboardId;
+  const retainedHoverId = hoverId;
   const query = search.value.trim().toLocaleLowerCase();
   filteredEntries = state.entries.filter((entry) => (filter === 'all' || (filter === 'pinned' ? entry.pinned : entry.kind === filter)) && (!query || entry.text.toLocaleLowerCase().includes(query)));
   pageOffset = Math.max(0, Math.min(pageOffset, Math.max(0, filteredEntries.length - capacity())));
@@ -139,8 +181,8 @@ function renderCards() {
   if (!shownEntries.some((entry) => entry.id === hoverId)) hoverId = null;
   if (!shownEntries.some((entry) => entry.id === keyboardId)) keyboardId = null;
   deck.replaceChildren();
-  const maxAngle = window.innerHeight < 580 ? 32 : window.innerHeight < 760 ? 38 : 42;
-  const spread = shownEntries.length <= 1 ? 0 : Math.min(maxAngle, (shownEntries.length - 1) * 10.5);
+  const geometry = fanGeometry();
+  const spread = shownEntries.length <= 1 ? 0 : Math.min(geometry.angle, (shownEntries.length - 1) * geometry.angle / 4);
   shownEntries.forEach((entry, index) => {
     const angle = shownEntries.length === 1 ? 0 : spread - (index / (shownEntries.length - 1)) * spread * 2;
     const slot = make('article', `card-slot${animateNext ? ' deal-in' : ''}`);
@@ -148,12 +190,24 @@ function renderCards() {
     slot.style.setProperty('--angle', `${angle}deg`); slot.style.setProperty('--inverse-angle', `${-angle}deg`); slot.style.setProperty('--card-index', String(index)); slot.style.zIndex = String(index + 1);
     const card = make('div', `clip-card color-${entry.color}${entry.pinned ? ' is-pinned' : ''}`);
     card.dataset.testid = 'fan-card';
+    const source = entry.source?.kind === 'foreground' && typeof entry.source.name === 'string' && entry.source.name.trim() ? entry.source : undefined;
+    const sourceName = source ? `${source.name} · 推定` : 'アプリ不明';
+    const watermark = make('div', 'source-watermark'); watermark.dataset.testid = 'source-watermark'; watermark.setAttribute('aria-hidden', 'true');
+    // Only bounded inline PNGs from the local app adapter are accepted. No URLs.
+    if (source?.icon && source.icon.length <= 400_000 && /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(source.icon)) {
+      const image = make('img', 'source-icon'); image.alt = ''; image.draggable = false; image.src = source.icon;
+      image.addEventListener('error', () => { watermark.replaceChildren(); addIcon(watermark, 'app'); }, { once: true });
+      watermark.append(image);
+    } else addIcon(watermark, 'app');
+    card.append(watermark);
     const copy = make('button', 'card-copy'); copy.type = 'button'; copy.dataset.action = 'copy'; copy.dataset.testid = 'copy-entry'; copy.tabIndex = entry.id === selectedId ? 0 : -1;
-    copy.setAttribute('aria-label', `${kindLabels[entry.kind]}をコピー: ${entry.text.slice(0, 100)}`);
+    copy.setAttribute('aria-label', `${sourceName}、${kindLabels[entry.kind]}をコピー: ${entry.text.slice(0, 100)}`);
     const number = make('span', 'card-number', String(pageOffset + index + 1).padStart(2, '0')); number.setAttribute('aria-hidden', 'true');
+    const sourceLabel = make('span', 'source-label', sourceName); sourceLabel.dataset.testid = 'source-app-label';
+    sourceLabel.title = source ? 'コピー検出時に最前面だったアプリです。コピー元を保証するものではありません。' : '収集時のアプリ情報はありません。';
     const content = make(entry.kind === 'code' ? 'pre' : 'p', `card-content content-${entry.kind}`, entry.text);
     const time = make('time', 'card-time', timeAgo(entry.createdAt)); time.dateTime = new Date(entry.createdAt).toISOString();
-    copy.append(number, content, time);
+    copy.append(number, sourceLabel, content, time);
     copy.addEventListener('click', () => { selectCard(entry.id); void copyEntry(entry); });
     card.append(copy);
     const topTools = make('div', 'card-top-tools');
@@ -174,10 +228,16 @@ function renderCards() {
     bottomTools.append(settings, cardAction(copiedId === entry.id ? 'check' : 'copy', copiedId === entry.id ? 'コピー済み' : 'コピー', 'copy-icon', () => { void copyEntry(entry); }));
     card.append(bottomTools); slot.append(card); deck.append(slot);
     slot.addEventListener('pointerenter', (event) => { if (event.pointerType === 'touch') return; hoverId = entry.id; selectedId = entry.id; updateExpansion(); });
-    slot.addEventListener('pointerleave', () => { if (hoverId === entry.id) { hoverId = null; updateExpansion(); } });
+    slot.addEventListener('pointerleave', () => { if (!slot.isConnected) return; if (hoverId === entry.id) { hoverId = null; updateExpansion(); } });
     slot.addEventListener('focusin', () => { keyboardId = entry.id; selectedId = entry.id; updateExpansion(); });
-    slot.addEventListener('focusout', (event) => { if (!slot.contains(event.relatedTarget as Node | null) && keyboardId === entry.id) { keyboardId = null; updateExpansion(); } });
+    slot.addEventListener('focusout', (event) => { if (!slot.isConnected) return; if (!slot.contains(event.relatedTarget as Node | null) && keyboardId === entry.id) { keyboardId = null; updateExpansion(); } });
   });
+  // Removing a focused/hovered DOM node may emit leave/out events, and an
+  // unfocused native WebContents may not emit focusin when focus is restored.
+  // Preserve the logical expansion explicitly instead of relying on DOM events.
+  keyboardId = shownEntries.some((entry) => entry.id === retainedKeyboardId) ? retainedKeyboardId : null;
+  hoverId = shownEntries.some((entry) => entry.id === retainedHoverId) ? retainedHoverId : null;
+  if (keyboardId && focusedSlot) selectedId = keyboardId;
   animateNext = false; updateExpansion();
   $('#empty-state').hidden = shownEntries.length > 0;
   $('#empty-label').textContent = query || filter !== 'all' ? '見つかりませんでした' : state.paused ? '記録を一時停止中' : '履歴はまだありません';
@@ -186,7 +246,9 @@ function renderCards() {
     const replacement = Array.from(deck.querySelectorAll<HTMLElement>('.card-slot')).find((slot) => slot.dataset.id === focusedSlot.dataset.id);
     const action = ['pin', 'delete', 'settings', 'search', 'previous', 'next', 'copy-icon'].includes(focusedAction ?? '') ? focusedAction : 'copy';
     const target = replacement?.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
+    if (target && replacement) { keyboardId = replacement.dataset.id!; selectedId = keyboardId; }
     (target ?? stage).focus({ preventScroll: true });
+    updateExpansion();
   }
 }
 function renderSettingsStatus() {
@@ -198,6 +260,7 @@ function renderSettingsStatus() {
   $('#pause-button').setAttribute('aria-pressed', String(state.paused));
   $<HTMLButtonElement>('#clear-history-button').disabled = !state.entries.length;
   $('#empty-settings').classList.toggle('has-warning', !state.status.shortcutRegistered || !!state.status.storageWarning);
+  if (settingsDialog.open) updateHistoryWarning();
 }
 function render() {
   if (!state) return;
@@ -213,8 +276,11 @@ function openSettings() {
   $('#search-popover').hidden = true;
   $<HTMLInputElement>('#shortcut-input').value = state.settings.shortcut;
   $<HTMLSelectElement>('#history-limit').value = String(state.settings.historyLimit);
-  $<HTMLInputElement>('#hide-after-copy').checked = state.settings.hideAfterCopy;
   $<HTMLInputElement>('#persistence').checked = state.settings.persistence;
+  $<HTMLInputElement>('#source-app').checked = state.settings.sourceApp !== false;
+  $<HTMLInputElement>('#fan-spread').value = String(state.settings.fanSpread ?? 42);
+  $<HTMLInputElement>('#fan-distance').value = String(state.settings.fanDistance ?? 0);
+  reductionScope = ''; updateHistoryWarning(); updateFanDraft();
   $('#settings-error').hidden = true;
   $('#platform-note').hidden = !state.status.wayland;
   $('#platform-note').textContent = 'Waylandではデスクトップ環境により、ショートカットやクリップボードの取得に制約があります。トレイメニューからも開けます。';
@@ -246,14 +312,19 @@ $('#clear-history-button').addEventListener('click', () => { if (!state) return;
 $('#confirm-clear').addEventListener('click', async () => { const button = $<HTMLButtonElement>('#confirm-clear'); button.disabled = true; if (await mutate(() => bridge.clearHistory(), '履歴を削除しました')) closeDialog(clearDialog); button.disabled = false; });
 document.querySelectorAll<HTMLButtonElement>('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => closeDialog($<HTMLDialogElement>(`#${button.dataset.closeDialog}`))));
 [settingsDialog, clearDialog].forEach((dialog) => {
-  dialog.addEventListener('close', () => { stopRecording(); (lastFocus?.isConnected && !lastFocus.closest('dialog') ? lastFocus : stage).focus({ preventScroll: true }); });
+  dialog.addEventListener('close', () => { stopRecording(); if (dialog === settingsDialog) { draftFan = null; renderCards(); } (lastFocus?.isConnected && !lastFocus.closest('dialog') ? lastFocus : stage).focus({ preventScroll: true }); });
   dialog.addEventListener('click', (event) => { if (event.target !== dialog) return; const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeDialog(dialog); });
 });
 $('#record-shortcut').addEventListener('click', () => { if (recording) { stopRecording(); return; } recording = true; $('#record-shortcut').textContent = '記録をやめる'; $('#record-shortcut').classList.add('recording'); $('#shortcut-help').textContent = 'Ctrl / ⌘ / Alt と一緒に、使いたいキーを押してください。Escで中止。'; });
+$('#fan-spread').addEventListener('input', updateFanDraft);
+$('#fan-distance').addEventListener('input', updateFanDraft);
+$('#history-limit').addEventListener('change', updateHistoryWarning);
 $('#settings-form').addEventListener('submit', async (event) => {
-  event.preventDefault(); stopRecording(); const save = $<HTMLButtonElement>('#save-settings'); const error = $('#settings-error'); save.disabled = true; error.hidden = true;
+  event.preventDefault(); stopRecording(); updateHistoryWarning();
+  if (!$('#history-reduction-warning').hidden && !$<HTMLInputElement>('#confirm-history-reduction').checked) { $<HTMLInputElement>('#confirm-history-reduction').focus(); return; }
+  const save = $<HTMLButtonElement>('#save-settings'); const error = $('#settings-error'); save.disabled = true; error.hidden = true;
   try {
-    const result = await bridge.updateSettings({ shortcut: $<HTMLInputElement>('#shortcut-input').value.trim(), historyLimit: Number($<HTMLSelectElement>('#history-limit').value), hideAfterCopy: $<HTMLInputElement>('#hide-after-copy').checked, persistence: $<HTMLInputElement>('#persistence').checked });
+    const result = await bridge.updateSettings({ shortcut: $<HTMLInputElement>('#shortcut-input').value.trim(), historyLimit: Number($<HTMLSelectElement>('#history-limit').value), persistence: $<HTMLInputElement>('#persistence').checked, sourceApp: $<HTMLInputElement>('#source-app').checked, fanSpread: Number($<HTMLInputElement>('#fan-spread').value), fanDistance: Number($<HTMLInputElement>('#fan-distance').value), ...(!$('#history-reduction-warning').hidden && $<HTMLInputElement>('#confirm-history-reduction').checked ? { confirmHistoryReduction: true } : {}) });
     if (!result.ok) { error.textContent = result.error || '設定を保存できませんでした。'; error.hidden = false; }
     else { closeDialog(settingsDialog); showToast('設定を保存しました'); }
   } catch { error.textContent = '設定を保存できませんでした。アプリとの接続を確認してください。'; error.hidden = false; }

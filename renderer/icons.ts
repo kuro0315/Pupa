@@ -1,6 +1,7 @@
 const svg = (body: string, viewBox = '0 0 24 24') => `<svg viewBox="${viewBox}" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${body}</svg>`;
 const stroke = 'stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"';
 export const icons = {
+  app: svg(`<rect x="3" y="3" width="18" height="18" rx="4" ${stroke}/><path d="M3 9h18M7 6h.01M10 6h.01M8 13h3v4H8zM14 13h3M14 17h3" ${stroke}/>`),
   search: svg(`<circle cx="10.5" cy="10.5" r="6.5" ${stroke}/><path d="m16 16 4.5 4.5" ${stroke}/>`),
   settings: svg(`<path d="m9.1 3-.5 2.2-2 .9-2-.7L2 9.9l1.7 1.5v2.2L2 15.1l2.6 4.5 2-.7 2 .9.5 2.2h5.8l.5-2.2 2-.9 2 .7 2.6-4.5-1.7-1.5v-2.2L22 9.9l-2.6-4.5-2 .7-2-.9L14.9 3H9.1Z" transform="translate(1 0) scale(.91)" ${stroke}/><circle cx="12" cy="12" r="3.1" ${stroke}/>`),
   close: svg(`<path d="m6 6 12 12M18 6 6 18" ${stroke}/>`),

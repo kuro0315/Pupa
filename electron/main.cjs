@@ -6,6 +6,7 @@ const os = require('node:os');
 const { pathToFileURL } = require('node:url');
 const { History, ClipboardMonitor, validateSettings, MAX_TEXT_BYTES } = require('./history.cjs');
 const { Storage } = require('./storage.cjs');
+const { detectSourceApp } = require('./source-app.cjs');
 const TEST_MODE = !app.isPackaged && process.env.PUPA_TEST_MODE === '1';
 if (TEST_MODE) app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'pupa-test-')));
 app.setName('Pupa');
@@ -14,10 +15,11 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
 let win, tray, timer, history, storage, monitor, settings;
 let paused = false, locked = false, suspended = false, quitting = false, shortcutRegistered = false, storageWarning = null;
-let shownAt = 0, hideTimer, mockClipboard = null, settingsBusy = false, copying = false;
+let shownAt = 0, hideTimer, mockClipboard = null, settingsBusy = false, copying = false, sourceBusy = false, sourceEpoch = 0, sourceController;
 const htmlPath = path.join(__dirname, '..', 'dist', 'index.html');
 const rendererURL = pathToFileURL(htmlPath).href;
 const wayland = process.platform === 'linux' && Boolean(process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === 'wayland');
+function invalidateSource() { sourceEpoch++; sourceController?.abort(); sourceController = null; }
 const state = () => ({ entries: history.snapshot(), settings: { ...settings }, paused,
   status: { shortcutRegistered, storageWarning, platform: process.platform, wayland, version: app.getVersion() } });
 const publish = () => { if (win && !win.isDestroyed()) win.webContents.send('pupa:changed', state()); refreshTray(); };
@@ -32,7 +34,7 @@ function bounds() {
 }
 function show() {
   if (!win || win.isDestroyed() || locked || suspended) return;
-  clearTimeout(hideTimer); win.setBounds(bounds()); win.show(); win.focus(); shownAt = Date.now();
+  invalidateSource(); clearTimeout(hideTimer); win.setBounds(bounds()); win.show(); win.focus(); shownAt = Date.now();
   win.webContents.send('pupa:shown');
 }
 function hide() { clearTimeout(hideTimer); if (win && !win.isDestroyed()) win.hide(); }
@@ -40,7 +42,7 @@ function toggle() { if (win?.isVisible()) hide(); else show(); }
 function registerShortcut(shortcut) {
   try { return globalShortcut.register(shortcut, toggle); } catch { return false; }
 }
-function setPaused(value) { paused = value; monitor.setPaused(paused || locked || suspended || copying); publish(); }
+function setPaused(value) { invalidateSource(); paused = value; monitor.setPaused(paused || locked || suspended || copying); publish(); }
 function refreshTray() {
   if (!tray || tray.isDestroyed()) return;
   tray.setToolTip(paused ? 'Pupa · 履歴を一時停止中' : 'Pupa · ひとつ前の、つづき。');
@@ -99,12 +101,12 @@ function setupIPC() {
       monitor.setPaused(paused || locked || suspended);
       if (copied) monitor.noteCopied(text);
     }
-    if (settings.hideAfterCopy) hide();
+    hide();
     return { ok: true };
   });
   handle('pupa:delete', id => { requireEntry(id); history.remove(id); persistHistory(); publish(); return { ok: true }; });
   handle('pupa:pin', id => { requireEntry(id); history.pin(id); persistHistory(); publish(); return { ok: true }; });
-  handle('pupa:clear', () => { history.clear(); monitor.resetBaseline(); persistHistory(); publish(); return { ok: true }; });
+  handle('pupa:clear', () => { invalidateSource(); history.clear(); monitor.resetBaseline(); persistHistory(); publish(); return { ok: true }; });
   handle('pupa:pause', value => { if (typeof value !== 'boolean') throw new Error('操作の形式が正しくありません。'); setPaused(value); return { ok: true }; });
   handle('pupa:settings', async patch => {
     if (settingsBusy) return { ok: false, error: '設定を保存しています。少し待ってお試しください。' };
@@ -112,7 +114,10 @@ function setupIPC() {
     const previous = settings;
     let registeredNew = false;
     try {
-      const next = validateSettings(patch, settings);
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('設定の形式が正しくありません。');
+      const { confirmHistoryReduction, ...requested } = patch;
+      const next = validateSettings(requested, settings);
+      if (next.historyLimit < history.entries.length && confirmHistoryReduction !== true) throw new Error('履歴の上限を減らすと古い履歴が削除されます。ピン留めも削除対象になる場合があります。確認してから保存してください。');
       const changed = next.shortcut !== previous.shortcut;
       if (changed) {
         registeredNew = registerShortcut(next.shortcut);
@@ -128,6 +133,7 @@ function setupIPC() {
         throw error;
       }
       if (changed) { globalShortcut.unregister(previous.shortcut); shortcutRegistered = true; }
+      if (settings.sourceApp !== next.sourceApp) invalidateSource();
       settings = next; history.limit = next.historyLimit; history.trim();
       storageWarning = null; persistHistory(); publish();
       return { ok: true };
@@ -169,14 +175,24 @@ async function boot() {
     tray = new Tray(trayIcon); tray.on('click', toggle); refreshTray();
   } catch { storageWarning = 'トレイアイコンを表示できません。ショートカット、または Pupa の再起動でカードをひらけます。'; }
   setupIPC();
-  monitor = new ClipboardMonitor({ read: readText, onText: text => { history.add(text); persistHistory(); publish(); }, onError: () => {
+  monitor = new ClipboardMonitor({ read: readText, onText: text => {
+    const capturedAt = Date.now(); history.add(text, capturedAt); persistHistory(); publish();
+    const entry = history.entries.find(value => value.text === text);
+    if (TEST_MODE || !settings.sourceApp || sourceBusy || !entry) return;
+    const id = entry.id; const epoch = sourceEpoch; sourceBusy = true;
+    const controller = new AbortController(); sourceController = controller;
+    Promise.resolve().then(() => detectSourceApp({ platform: process.platform, wayland, signal: controller.signal })).then(source => {
+      if (epoch !== sourceEpoch || !settings.sourceApp || paused || locked || suspended || quitting || !source || /^pupa$/i.test(source.name)) return;
+      if (history.setSource(id, capturedAt, source)) { persistHistory(); publish(); }
+    }).catch(() => {}).finally(() => { sourceBusy = false; if (sourceController === controller) sourceController = null; });
+  }, onError: () => {
     if (!storageWarning) { storageWarning = 'クリップボードを読み取れません。OS の権限や Linux のセッションを確認してください。'; publish(); }
   } });
   shortcutRegistered = registerShortcut(settings.shortcut);
-  powerMonitor.on('lock-screen', () => { locked = true; monitor.setPaused(true); hide(); });
-  powerMonitor.on('unlock-screen', () => { locked = false; monitor.setPaused(paused || suspended || copying); });
-  powerMonitor.on('suspend', () => { suspended = true; monitor.setPaused(true); hide(); });
-  powerMonitor.on('resume', () => { suspended = false; monitor.setPaused(paused || locked || copying); });
+  powerMonitor.on('lock-screen', () => { invalidateSource(); locked = true; monitor.setPaused(true); hide(); });
+  powerMonitor.on('unlock-screen', () => { invalidateSource(); locked = false; monitor.setPaused(paused || suspended || copying); });
+  powerMonitor.on('suspend', () => { invalidateSource(); suspended = true; monitor.setPaused(true); hide(); });
+  powerMonitor.on('resume', () => { invalidateSource(); suspended = false; monitor.setPaused(paused || locked || copying); });
   screen.on('display-removed', () => { if (win.isVisible()) win.setBounds(bounds()); });
   screen.on('display-metrics-changed', () => { if (win.isVisible()) win.setBounds(bounds()); });
   await win.loadFile(htmlPath);
@@ -194,5 +210,5 @@ if (gotLock) {
   app.on('activate', () => { if (win) show(); });
 }
 app.on('window-all-closed', () => {});
-app.on('before-quit', () => { quitting = true; clearInterval(timer); clearTimeout(hideTimer); if (monitor) monitor.setPaused(true); });
+app.on('before-quit', () => { quitting = true; invalidateSource(); clearInterval(timer); clearTimeout(hideTimer); if (monitor) monitor.setPaused(true); });
 app.on('will-quit', () => { globalShortcut.unregisterAll(); if (tray && !tray.isDestroyed()) tray.destroy(); });

@@ -92,9 +92,9 @@ async function harness(t, options = {}) {
     Menu: { buildFromTemplate: value => value }, nativeImage: { createFromPath: () => ({ setTemplateImage() {} }) }, screen,
     session: { fromPartition: (partition, config) => { localSession.partition = partition; localSession.config = config; return localSession; } }, powerMonitor };
   const context = vm.createContext({
-    require: name => name === 'electron' ? electron : name === './storage.cjs' ? { Storage: FaultableStorage } : localRequire(name),
+    require: name => name === 'electron' ? electron : name === './storage.cjs' ? { Storage: FaultableStorage } : name === './source-app.cjs' ? { detectSourceApp: options.detectSourceApp || (async () => null) } : localRequire(name),
     __dirname: path.dirname(mainPath), process: { platform: 'linux', env: options.env || {} },
-    console: { error: (...args) => errors.push(args) }, Buffer,
+    console: { error: (...args) => errors.push(args) }, Buffer, AbortController,
     setInterval: (fn, delay) => { timer = { fn, delay, cleared: false }; return timer; },
     clearInterval: value => { if (value) value.cleared = true; }, global: {},
     setTimeout: (fn, delay) => { const task = { fn, delay, cleared: false }; timeouts.push(task); return task; },
@@ -340,7 +340,7 @@ test('unlock while suspended and resume while manually paused do not resume capt
   assert.equal((await h.state()).entries.length, 0);
 });
 
-test('changing settings commits a working shortcut and respects hide-after-copy', async t => {
+test('changing settings commits a working shortcut and always hides successful copies', async t => {
   const h = await harness(t);
   assert.equal((await h.call('settings', { shortcut: 'Alt+Space', hideAfterCopy: false, historyLimit: 30 })).ok, true);
   assert.equal(h.registered.has('Alt+Space'), true);
@@ -352,7 +352,7 @@ test('changing settings commits a working shortcut and respects hide-after-copy'
   h.setText('card'); await h.tick();
   h.app.emit('activate');
   await h.call('copy', (await h.state()).entries[0].id);
-  assert.equal(h.window.visible, true);
+  assert.equal(h.window.visible, false);
 });
 
 test('shortcut conflicts and settings write failures preserve the previous working shortcut/settings', async t => {
@@ -486,7 +486,7 @@ test('lowering history limit trims immediately and persists only the trimmed ent
   const h = await harness(t, { settings: { persistence: true } });
   for (let index = 0; index < 40; index++) { h.setText(`synthetic entry ${index}`); await h.tick(); }
   assert.equal((await h.state()).entries.length, 40);
-  assert.equal((await h.call('settings', { historyLimit: 30 })).ok, true);
+  assert.equal((await h.call('settings', { historyLimit: 30, confirmHistoryReduction: true })).ok, true);
   assert.equal((await h.state()).entries.length, 30);
   assert.equal(JSON.parse(fs.readFileSync(h.store.historyPath, 'utf8')).entries.length, 30);
   assert.equal((await h.call('settings', { historyLimit: 1 })).ok, false);
@@ -509,3 +509,34 @@ for (const interrupt of ['clear', 'pause', 'lock']) {
     if (fs.existsSync(h.store.historyPath)) assert.deepEqual(JSON.parse(fs.readFileSync(h.store.historyPath, 'utf8')).entries, []);
   });
 }
+
+test('source app metadata is optional and enrichment is bound to its existing entry', async t => {
+  let calls=0; const h=await harness(t,{detectSourceApp:async()=>{calls++;return {name:'Synthetic Editor',kind:'foreground'};}});
+  h.setText('attributed'); await h.tick(); await new Promise(setImmediate);
+  assert.equal(calls,1); assert.equal((await h.state()).entries[0].source.name,'Synthetic Editor');
+  await h.call('settings',{sourceApp:false}); h.setText('not attributed'); await h.tick(); await new Promise(setImmediate);
+  assert.equal(calls,1); assert.equal((await h.state()).entries[0].source,undefined);
+});
+
+for (const interruption of ['pause','clear','delete','show','disable']) {
+  test(`in-flight source metadata cannot survive ${interruption}`,async t=>{
+    const pending=deferred(); let signal; const h=await harness(t,{detectSourceApp:async options=>{signal=options.signal;return pending.promise;}});
+    h.setText('synthetic source'); await h.tick(); await Promise.resolve(); const id=(await h.state()).entries[0].id;
+    if(interruption==='pause')await h.call('pause',true);
+    if(interruption==='clear')await h.call('clear');
+    if(interruption==='delete')await h.call('delete',id);
+    if(interruption==='show')h.app.emit('activate');
+    if(interruption==='disable')await h.call('settings',{sourceApp:false});
+    pending.resolve({name:'Stale Demo',kind:'foreground'}); await new Promise(setImmediate);
+    assert.equal((await h.state()).entries.some(e=>e.source),false);
+    if(interruption!=='delete')assert.equal(signal.aborted,true);
+  });
+}
+
+test('lowering history capacity requires explicit acknowledgement before any deletion',async t=>{
+  const h=await harness(t); for(let i=0;i<35;i++){h.setText(`synthetic ${i}`);await h.tick();}
+  const before=(await h.state()).entries.length;
+  assert.equal((await h.call('settings',{historyLimit:30})).ok,false); assert.equal((await h.state()).entries.length,before);
+  assert.equal((await h.call('settings',{historyLimit:30,confirmHistoryReduction:true})).ok,true);
+  assert.equal((await h.state()).entries.length,30); assert.equal((await h.state()).settings.confirmHistoryReduction,undefined);
+});

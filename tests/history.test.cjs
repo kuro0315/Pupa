@@ -186,3 +186,31 @@ test('shortcut settings require a non-Shift modifier and a bounded supported key
     assert.throws(() => validateSettings({ shortcut }), `accepted unsafe/unsupported shortcut ${shortcut}`);
   }
 });
+
+test('fan layout preferences are bounded integers', () => {
+  assert.equal(DEFAULT_SETTINGS.fanSpread, 42); assert.equal(DEFAULT_SETTINGS.fanDistance, 0);
+  assert.equal(validateSettings({ fanSpread: 55, fanDistance: 90 }).fanDistance, 90);
+  for (const patch of [{fanSpread:19},{fanSpread:56},{fanSpread:30.5},{fanDistance:-1},{fanDistance:91},{fanDistance:'30'}]) assert.throws(()=>validateSettings(patch));
+});
+
+test('source attribution is sanitized, copied safely, cleared on recopy, and cannot update stale entries', () => {
+  const { sanitizeSource } = require('../electron/history.cjs');
+  const source = {name:'Demo Editor',kind:'foreground',icon:'https://example.invalid/icon.png',title:'must not store'};
+  assert.deepEqual(sanitizeSource(source), {name:'Demo Editor',kind:'foreground'});
+  assert.equal(sanitizeSource({name:'x'.repeat(121),kind:'foreground'}),null);
+  assert.equal(sanitizeSource({name:'Demo',kind:'clipboard-owner'}),null);
+  const h = new History(); h.add('first',10); const id=h.entries[0].id;
+  assert.equal(h.setSource(id,9,source),false); assert.equal(h.setSource(id,10,source),true);
+  const snapshot=h.snapshot(); snapshot[0].source.name='mutated'; assert.equal(h.get(id).source.name,'Demo Editor');
+  h.add('first',11); assert.equal(h.get(id).source,undefined); assert.equal(h.setSource(id,10,source),false);
+  h.clear(); assert.equal(h.setSource(id,11,source),false);
+});
+
+test('restoring source metadata keeps only bounded name and PNG data, included in total budget', () => {
+  const h=new History(100);
+  h.restore([{text:'record',createdAt:10,source:{name:'Demo',kind:'foreground',icon:'data:image/svg+xml,<svg/>',title:'discard'}}]);
+  assert.deepEqual(h.entries[0].source,{name:'Demo',kind:'foreground'});
+  h.clear(); for(let i=0;i<32;i++) h.add(String(i).padStart(2,'0')+'x'.repeat(MAX_TEXT_BYTES-2),i+1);
+  assert.equal(h.entries.length,32); const entry=h.entries[0]; h.setSource(entry.id,entry.createdAt,{name:'Demo',kind:'foreground'});
+  assert.equal(h.entries.length,31);
+});

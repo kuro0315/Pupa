@@ -36,6 +36,9 @@ const path = require('node:path');
     userData = await app.evaluate(() => global.pupaTest.userData);
     assert.equal(fs.existsSync(path.join(userData, 'history.json')), false);
     await page.keyboard.press('ArrowDown');
+    await expect(page.locator('.card-slot').first()).toHaveClass(/is-expanded/);
+    await app.evaluate(() => global.pupaTest.add('Rerender focus fixture'));
+    await expect(page.locator('.card-slot.is-expanded')).toHaveCount(1);
     await page.waitForTimeout(1100);
     fs.mkdirSync('artifacts', { recursive: true });
     await page.screenshot({ path: 'artifacts/pupa-native-linux.png' });
@@ -53,7 +56,7 @@ const path = require('node:path');
       test.setPaused(true); test.setClipboard('not captured while paused'); await test.tick();
       test.setPaused(false); await test.tick();
     });
-    assert.equal(await app.evaluate(() => global.pupaTest.state().entries.length), 3);
+    assert.equal(await app.evaluate(() => global.pupaTest.state().entries.length), 4);
     console.log('PASS: native Electron startup, isolated clipboard collection, default memory-only history, copy-and-hide, repeated toggle/Escape, pause baseline.');
   } finally { await app.close(); if (userData) fs.rmSync(userData, { recursive: true, force: true }); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

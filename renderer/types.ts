@@ -1,5 +1,10 @@
 export type EntryKind = 'text' | 'link' | 'code';
 export type EntryColor = 'mint' | 'rose' | 'lavender' | 'butter';
+export interface EntrySource {
+  name: string;
+  icon?: string;
+  kind: 'foreground';
+}
 export interface ClipboardEntry {
   id: string;
   text: string;
@@ -7,12 +12,16 @@ export interface ClipboardEntry {
   color: EntryColor;
   createdAt: number;
   pinned: boolean;
+  source?: EntrySource;
 }
 export interface Settings {
   shortcut: string;
   historyLimit: number;
   persistence: boolean;
   hideAfterCopy: boolean;
+  sourceApp?: boolean;
+  fanSpread?: number;
+  fanDistance?: number;
 }
 export interface State {
   entries: ClipboardEntry[];
@@ -34,7 +43,7 @@ export interface PupaBridge {
   togglePin(id: string): Promise<Result>;
   clearHistory(): Promise<Result>;
   setPaused(paused: boolean): Promise<Result>;
-  updateSettings(settings: Partial<Settings>): Promise<Result>;
+  updateSettings(settings: Partial<Settings> & { confirmHistoryReduction?: boolean }): Promise<Result>;
   hide(): void;
   quit(): void;
   onState(callback: (state: State) => void): () => void;

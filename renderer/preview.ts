@@ -5,13 +5,13 @@ export function createPreviewBridge(): PupaBridge {
   const now = Date.now();
   let state: State = {
     entries: [
-      { id: 'demo-note', kind: 'text', color: 'butter', pinned: true, createdAt: now - 120000, text: '小さなひらめきを、逃さない。\n今日の「いいな」を、明日のアイデアに。' },
-      { id: 'demo-link', kind: 'link', color: 'mint', pinned: false, createdAt: now - 360000, text: 'https://github.com/kuro0315/Pupa' },
-      { id: 'demo-code', kind: 'code', color: 'lavender', pinned: false, createdAt: now - 720000, text: "const littleThings = ['ひらめき', 'ことば', '好き'];\n\nconst collect = (idea) => littleThings.push(idea);" },
-      { id: 'demo-text', kind: 'text', color: 'rose', pinned: false, createdAt: now - 1440000, text: '週末の小さなリスト\n・いつものカフェで、ゆっくり\n・読みかけの本を一章\n・春色の花を一輪' },
+      { id: 'demo-note', source: { name: 'Memo Lab（デモ）', kind: 'foreground' }, kind: 'text', color: 'butter', pinned: true, createdAt: now - 120000, text: '小さなひらめきを、逃さない。\n今日の「いいな」を、明日のアイデアに。' },
+      { id: 'demo-link', source: { name: 'Orbit Browser（デモ）', kind: 'foreground' }, kind: 'link', color: 'mint', pinned: false, createdAt: now - 360000, text: 'https://github.com/kuro0315/Pupa' },
+      { id: 'demo-code', source: { name: 'Pixel Editor（デモ）', kind: 'foreground' }, kind: 'code', color: 'lavender', pinned: false, createdAt: now - 720000, text: "const littleThings = ['ひらめき', 'ことば', '好き'];\n\nconst collect = (idea) => littleThings.push(idea);" },
+      { id: 'demo-text', source: { name: 'Memo Lab（デモ）', kind: 'foreground' }, kind: 'text', color: 'rose', pinned: false, createdAt: now - 1440000, text: '週末の小さなリスト\n・いつものカフェで、ゆっくり\n・読みかけの本を一章\n・春色の花を一輪' },
       { id: 'demo-thought', kind: 'text', color: 'butter', pinned: false, createdAt: now - 3600000, text: 'つくることは、よく見ること。\n何気ない毎日のなかに、ヒントはたくさん。' },
     ],
-    settings: { shortcut: 'CommandOrControl+Shift+Space', historyLimit: 60, persistence: false, hideAfterCopy: true },
+    settings: { shortcut: 'CommandOrControl+Shift+Space', historyLimit: 60, persistence: false, hideAfterCopy: true, sourceApp: true, fanSpread: 42, fanDistance: 0 },
     paused: false,
     status: { shortcutRegistered: true, storageWarning: null, platform: /Mac/.test(navigator.platform) ? 'darwin' : 'linux', wayland: false, version: '0.1.0' },
   };
@@ -25,7 +25,7 @@ export function createPreviewBridge(): PupaBridge {
     togglePin: async (id) => { const entry = state.entries.find((item) => item.id === id); if (entry) entry.pinned = !entry.pinned; return emit(); },
     clearHistory: async () => { state.entries = []; return emit(); },
     setPaused: async (paused) => { state.paused = paused; return emit(); },
-    updateSettings: async (settings) => { state.settings = { ...state.settings, ...settings }; return emit(); },
+    updateSettings: async ({ confirmHistoryReduction: _confirmation, ...settings }) => { state.settings = { ...state.settings, ...settings }; return emit(); },
     hide: () => {},
     quit: () => {},
     onState: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
