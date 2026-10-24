@@ -49,6 +49,10 @@ let filter = 'all';
 let selectedId: string | null = null;
 let hoverId: string | null = null;
 let keyboardId: string | null = null;
+let interactionMode: 'pointer' | 'keyboard' = 'pointer';
+let pointerPressId: string | null = null;
+type CardRegion = { id: string; left: number; top: number; width: number; height: number; angle: number; expandedX: number; expandedY: number; expandedAngle: number; scale: number };
+let cardRegions: CardRegion[] = [];
 let lastPointerPosition: { x: number; y: number } | null = null;
 let filteredEntries: ClipboardEntry[] = [];
 let shownEntries: ClipboardEntry[] = [];
@@ -98,7 +102,7 @@ async function mutate(action: () => Promise<Result>, success?: string) {
   } catch { showToast('アプリとの接続を確認してください。', true); return false; }
 }
 function updateExpansion() {
-  const activeId = hoverId ?? keyboardId;
+  const activeId = interactionMode === 'pointer' ? hoverId : keyboardId;
   for (const slot of deck.querySelectorAll<HTMLElement>('.card-slot')) {
     const expanded = slot.dataset.id === activeId;
     slot.classList.toggle('is-expanded', expanded);
@@ -109,9 +113,38 @@ function updateExpansion() {
 }
 function selectCard(id: string, focus = false) {
   selectedId = id;
-  if (focus) { hoverId = null; keyboardId = id; }
+  if (focus) { interactionMode = 'keyboard'; hoverId = null; keyboardId = id; }
   updateExpansion();
   if (focus) Array.from(deck.querySelectorAll<HTMLElement>('.card-slot')).find((slot) => slot.dataset.id === id)?.querySelector<HTMLButtonElement>('.card-copy')?.focus({ preventScroll: true });
+}
+// Hit testing follows the unchanging hand, not the animated front-most card.
+// Otherwise the card pulled left would cover its neighbors and trap the hover.
+function containsPoint(region: CardRegion, x: number, y: number, expanded = false) {
+  const angle = (expanded ? region.expandedAngle : region.angle) * Math.PI / 180;
+  const scale = expanded ? region.scale : 1;
+  const dx = x - (region.left + region.width / 2 + (expanded ? region.expandedX : 0));
+  const dy = y - (region.top + region.height / 2 + (expanded ? region.expandedY : 0));
+  return Math.abs(dx * Math.cos(angle) + dy * Math.sin(angle)) <= region.width * scale / 2
+    && Math.abs(-dx * Math.sin(angle) + dy * Math.cos(angle)) <= region.height * scale / 2;
+}
+function pointerRegion(x: number, y: number, target: Element | null) {
+  const activeId = interactionMode === 'pointer' ? hoverId : keyboardId;
+  const active = cardRegions.find(region => region.id === activeId);
+  // Visible tools remain operable even where the pulled card overlaps the hand.
+  if (active && target?.closest('.card-icon')?.closest<HTMLElement>('.card-slot')?.dataset.id === active.id) return active;
+  const resting = [...cardRegions].reverse().find(region => containsPoint(region, x, y));
+  if (resting) return resting;
+  // The exposed left portion is also usable, but never masks another leaf's
+  // resting region. Moving entirely away from both regions returns the hand.
+  return active && containsPoint(active, x, y, true) ? active : undefined;
+}
+function pointAtCard(id: string | null) {
+  interactionMode = 'pointer'; hoverId = id;
+  if (id) selectedId = id;
+  updateExpansion();
+}
+function isUtilityTarget(target: Element | null) {
+  return !!target?.closest('dialog, .search-popover, .preview-controls, .preview-launcher, .empty-state, .toast');
 }
 async function copyEntry(entry: ClipboardEntry) {
   if (copying) return;
@@ -169,7 +202,7 @@ function fanGeometry(count: number) {
     const centerY = height / 2 - position * Math.max(0, height / 2 - margin - halfHeight) * fullness * countSpread;
     // Pull the leaf out of the hand rather than zooming it: only a small lift
     // and a trace of its original angle remain, so the text stays readable.
-    const expandedAngle = angle * .06;
+    const expandedAngle = angle * (compact ? .06 : .8);
     const expandedRadians = expandedAngle * Math.PI / 180;
     const expandedWidth = cardWidth * Math.cos(expandedRadians) + cardHeight * Math.abs(Math.sin(expandedRadians));
     const expandedHeight = cardWidth * Math.abs(Math.sin(expandedRadians)) + cardHeight * Math.cos(expandedRadians);
@@ -178,7 +211,7 @@ function fanGeometry(count: number) {
     const expandedHalfHeight = expandedHeight * scale / 2;
     const expandedX = clamp(centerX - (compact ? 36 : 92), margin + expandedHalfWidth, width - margin - expandedHalfWidth);
     const expandedY = clamp(centerY, margin + expandedHalfHeight, height - margin - expandedHalfHeight);
-    return { angle, left: centerX - cardWidth / 2, top: centerY - cardHeight / 2, expandedX: expandedX - centerX, expandedY: expandedY - centerY, expandedAngle, scale };
+    return { angle, width: cardWidth, height: cardHeight, left: centerX - cardWidth / 2, top: centerY - cardHeight / 2, expandedX: expandedX - centerX, expandedY: expandedY - centerY, expandedAngle, scale };
   });
 }
 function updateHistoryWarning() {
@@ -204,6 +237,7 @@ function renderCards() {
   const focusedAction = focused?.dataset.action;
   const retainedKeyboardId = focusedSlot?.dataset.id ?? keyboardId;
   const retainedHoverId = hoverId;
+  const retainedMode = interactionMode;
   const query = search.value.trim().toLocaleLowerCase();
   filteredEntries = state.entries.filter((entry) => (filter === 'all' || (filter === 'pinned' ? entry.pinned : entry.kind === filter)) && (!query || entry.text.toLocaleLowerCase().includes(query)));
   pageOffset = Math.max(0, Math.min(pageOffset, Math.max(0, filteredEntries.length - capacity())));
@@ -213,6 +247,7 @@ function renderCards() {
   if (!shownEntries.some((entry) => entry.id === keyboardId)) keyboardId = null;
   deck.replaceChildren();
   const geometry = fanGeometry(shownEntries.length);
+  cardRegions = geometry.map((region, index) => ({ ...region, id: shownEntries[index].id }));
   shownEntries.forEach((entry, index) => {
     const { angle, left, top, expandedX, expandedY, expandedAngle, scale } = geometry[index];
     const slot = make('article', `card-slot${animateNext ? ' deal-in' : ''}`);
@@ -259,17 +294,7 @@ function renderCards() {
     settings.classList.toggle('has-warning', warning); settings.classList.toggle('is-paused', state!.paused);
     bottomTools.append(settings, cardAction(copiedId === entry.id ? 'check' : 'copy', copiedId === entry.id ? 'コピー済み' : 'コピー', 'copy-icon', () => { void copyEntry(entry); }));
     card.append(bottomTools); slot.append(card); deck.append(slot);
-    // A rebuilt or resized card can emit pointerenter under a stationary
-    // cursor. Only actual pointer movement may supersede keyboard focus.
-    slot.addEventListener('pointermove', (event) => {
-      if (event.pointerType === 'touch') return;
-      const moved = !lastPointerPosition || event.clientX !== lastPointerPosition.x || event.clientY !== lastPointerPosition.y;
-      lastPointerPosition = { x: event.clientX, y: event.clientY };
-      if (!moved || hoverId === entry.id) return;
-      hoverId = entry.id; selectedId = entry.id; updateExpansion();
-    });
-    slot.addEventListener('pointerleave', () => { if (!slot.isConnected) return; if (hoverId === entry.id) { hoverId = null; updateExpansion(); } });
-    slot.addEventListener('focusin', () => { hoverId = null; keyboardId = entry.id; selectedId = entry.id; updateExpansion(); });
+    slot.addEventListener('focusin', () => { interactionMode = 'keyboard'; hoverId = null; keyboardId = entry.id; selectedId = entry.id; updateExpansion(); });
     slot.addEventListener('focusout', (event) => { if (!slot.isConnected) return; if (!slot.contains(event.relatedTarget as Node | null) && keyboardId === entry.id) { keyboardId = null; updateExpansion(); } });
   });
   // Removing a focused/hovered DOM node may emit leave/out events, and an
@@ -290,6 +315,9 @@ function renderCards() {
     (target ?? stage).focus({ preventScroll: true });
     updateExpansion();
   }
+  interactionMode = retainedMode;
+  hoverId = shownEntries.some((entry) => entry.id === retainedHoverId) ? retainedHoverId : null;
+  updateExpansion();
 }
 function renderSettingsStatus() {
   if (!state) return;
@@ -334,9 +362,52 @@ function resetForShown() {
   if (settingsDialog.open) settingsDialog.close();
   if (clearDialog.open) clearDialog.close();
   clearTimeout(copiedTimer); copiedId = null; clearTimeout(toastTimer); $('#toast').hidden = true;
-  search.value = ''; filter = 'all'; pageOffset = 0; selectedId = null; hoverId = null; keyboardId = null; animateNext = true; $('#search-popover').hidden = true; render(); stage.focus({ preventScroll: true });
+  search.value = ''; filter = 'all'; pageOffset = 0; selectedId = null; hoverId = null; keyboardId = null; interactionMode = 'pointer'; lastPointerPosition = null; animateNext = true; $('#search-popover').hidden = true; render(); stage.focus({ preventScroll: true });
 }
 function revealPreview() { if (!preview) return; clearTimeout(previewTimer); stage.classList.remove('is-tucked'); $('#fan-viewport').inert = false; $('#preview-launcher').hidden = true; resetForShown(); }
+
+stage.addEventListener('pointermove', (event) => {
+  if (event.pointerType === 'touch' || settingsDialog.open || clearDialog.open || stage.classList.contains('is-tucked')) return;
+  const moved = !lastPointerPosition || event.clientX !== lastPointerPosition.x || event.clientY !== lastPointerPosition.y;
+  lastPointerPosition = { x: event.clientX, y: event.clientY };
+  if (!moved) return;
+  const target = event.target instanceof Element ? event.target : null;
+  const region = isUtilityTarget(target) ? undefined : pointerRegion(event.clientX, event.clientY, target);
+  // A keyboard user can approach the pulled card from outside the hand without
+  // collapsing it. Once the pointer engages a card, pointer-leave owns reset.
+  if (!region && interactionMode === 'keyboard') return;
+  pointAtCard(region?.id ?? null);
+}, true);
+stage.addEventListener('pointerleave', () => { if (interactionMode === 'pointer') pointAtCard(null); });
+window.addEventListener('blur', () => { if (interactionMode === 'pointer') pointAtCard(null); });
+stage.addEventListener('pointerdown', (event) => {
+  pointerPressId = null;
+  if (event.button !== 0 || settingsDialog.open || clearDialog.open) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (isUtilityTarget(target) || target?.closest('.card-icon')) return;
+  const visibleCard = target?.closest('.card-copy')?.closest<HTMLElement>('.card-slot.is-expanded');
+  pointerPressId = visibleCard?.dataset.id ?? pointerRegion(event.clientX, event.clientY, target)?.id ?? null;
+  // Keep the mouse's resolved card instead of moving DOM focus to whichever
+  // animated visual happened to receive pointerdown halfway through a switch.
+  if (pointerPressId) event.preventDefault();
+}, true);
+stage.addEventListener('pointerup', () => { setTimeout(() => { pointerPressId = null; }, 0); });
+stage.addEventListener('pointercancel', () => { pointerPressId = null; });
+stage.addEventListener('click', (event) => {
+  // Keyboard activation belongs to its focused button. Pointer clicks resolve
+  // through the same stable map as hover, even during the pull animation.
+  if (event.detail === 0 || event.button !== 0 || settingsDialog.open || clearDialog.open) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (isUtilityTarget(target)) return;
+  const tool = target?.closest('.card-icon');
+  if (tool?.closest('.card-slot.is-expanded')) return;
+  const visibleCard = target?.closest('.card-copy')?.closest<HTMLElement>('.card-slot.is-expanded');
+  const id = pointerPressId ?? visibleCard?.dataset.id ?? pointerRegion(event.clientX, event.clientY, target)?.id;
+  pointerPressId = null;
+  const entry = id && shownEntries.find(candidate => candidate.id === id);
+  if (!entry) return;
+  event.preventDefault(); event.stopImmediatePropagation(); pointAtCard(entry.id); void copyEntry(entry);
+}, true);
 
 $('#backdrop').addEventListener('click', hideApp);
 $('#preview-launcher').addEventListener('click', revealPreview);

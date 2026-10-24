@@ -209,7 +209,8 @@ for (const viewport of [
       expect(expanded!.y).toBeGreaterThanOrEqual(10);
       expect(expanded!.x + expanded!.width).toBeLessThanOrEqual(viewport.width - 10);
       expect(expanded!.y + expanded!.height).toBeLessThanOrEqual(viewport.height - 10);
-      expect(expanded!.width).toBeGreaterThan(await cards(page).nth(index).evaluate(el => (el as HTMLElement).offsetWidth));
+      // With the leaf's original tilt preserved, its axis-aligned width can
+      // shrink even while it scales up. Measure the actual transform below.
       const pull = await cards(page).nth(index).evaluate(el => {
         const slot = el as HTMLElement;
         const card = slot.querySelector<HTMLElement>('.clip-card')!;
@@ -286,3 +287,134 @@ test('explicit focus replaces hover and stationary resize cannot steal it', asyn
   await page.getByTestId('copy-entry').last().hover();
   await expect(cards(page).last()).toHaveClass(/is-expanded/);
 });
+
+const installHandFixture = async (page: import('@playwright/test').Page, count = 7) => {
+  await page.addInitScript(count => {
+    const colors = ['butter', 'mint', 'lavender', 'rose'];
+    const state = { entries: Array.from({ length: count }, (_, index) => ({ id: `hand-${index + 1}`, text: `HAND ${String(index + 1).padStart(2, '0')}\nカーソルで手札を選ぶ。\nクリックでコピー。`, kind: 'text', color: colors[index % colors.length], createdAt: Date.now() - index * 60000, pinned: false, source: { kind: 'foreground', name: 'Hand demo' } })), settings: { shortcut: 'CommandOrControl+Shift+Space', historyLimit: 100, persistence: false, sourceApp: true, fanSpread: 72, fanDistance: 0 }, paused: false, status: { shortcutRegistered: true, storageWarning: null, platform: 'linux', wayland: false, version: 'interaction-test' } };
+    (window as any).handCopies = []; (window as any).handHidden = 0;
+    (window as any).pupa = { getState: async () => state, onState: () => () => {}, onShown: () => () => {}, hide: () => { (window as any).handHidden++; }, quit: () => {}, copyEntry: async (id: string) => { (window as any).handCopies.push(id); return { ok: true }; } };
+  }, count);
+};
+
+const restingHandPoints = async (page: import('@playwright/test').Page) => page.locator('.card-slot').evaluateAll(elements => {
+  const regions = elements.map(element => {
+    const el = element as HTMLElement;
+    const angle = parseFloat(el.style.getPropertyValue('--angle')) * Math.PI / 180;
+    return { id: el.dataset.id!, cx: parseFloat(el.style.left) + el.offsetWidth / 2, cy: parseFloat(el.style.top) + el.offsetHeight / 2, w: el.offsetWidth, h: el.offsetHeight, angle };
+  });
+  const local = (r: typeof regions[number], x: number, y: number) => ({ x: (x - r.cx) * Math.cos(r.angle) + (y - r.cy) * Math.sin(r.angle), y: -(x - r.cx) * Math.sin(r.angle) + (y - r.cy) * Math.cos(r.angle) });
+  const contains = (r: typeof regions[number], x: number, y: number) => { const p = local(r, x, y); return Math.abs(p.x) <= r.w / 2 && Math.abs(p.y) <= r.h / 2; };
+  return regions.map((r, index) => {
+    let best: { id: string; x: number; y: number; score: number } | null = null;
+    for (let y = 12; y < innerHeight - 12; y += 6) for (let x = 12; x < innerWidth - 12; x += 6) {
+      if (!contains(r, x, y) || regions.slice(index + 1).some(other => contains(other, x, y))) continue;
+      const p = local(r, x, y);
+      let score = Math.min(r.w / 2 - Math.abs(p.x), r.h / 2 - Math.abs(p.y));
+      for (const other of regions.slice(index + 1)) { const q = local(other, x, y); score = Math.min(score, Math.max(Math.abs(q.x) - other.w / 2, Math.abs(q.y) - other.h / 2)); }
+      if (!best || score > best.score) best = { id: r.id, x, y, score };
+    }
+    if (!best) throw new Error(`No exposed resting region for ${r.id}`);
+    return best;
+  });
+});
+
+test('record seven-card pointer sweep with no sticky selection or accidental copy', async ({ browser }) => {
+  fs.mkdirSync('artifacts', { recursive: true });
+  const context = await browser.newContext({ viewport: { width: 780, height: 900 }, recordVideo: { dir: 'artifacts', size: { width: 780, height: 900 } } });
+  const page = await context.newPage();
+  await installHandFixture(page); await page.goto('http://127.0.0.1:5173/');
+  await expect(cards(page)).toHaveCount(7); await page.evaluate(() => document.fonts.ready); await page.waitForTimeout(1100);
+  // This marker follows real Playwright mouse events. It is a capture overlay,
+  // not a replacement animation or part of the production interface.
+  await page.evaluate(() => {
+    const cursor = document.createElement('div'); cursor.setAttribute('aria-hidden', 'true');
+    cursor.style.cssText = 'position:fixed;left:0;top:0;width:14px;height:14px;border:2px solid #fff;background:#46e7ee99;border-radius:50%;z-index:9999;pointer-events:none;transform:translate(-50%,-50%);box-shadow:0 0 0 3px #10182088';
+    document.body.append(cursor); document.addEventListener('pointermove', event => { cursor.style.left = `${event.clientX}px`; cursor.style.top = `${event.clientY}px`; }, true);
+  });
+  const points = await restingHandPoints(page);
+  await page.mouse.move(24, 24); await page.waitForTimeout(300);
+  const sequence = [...points, ...points.slice(0, -1).reverse()];
+  for (const point of sequence) {
+    await page.mouse.move(point.x, point.y, { steps: 12 });
+    await expect(page.locator('.card-slot.is-expanded')).toHaveCount(1);
+    await expect(page.locator('.card-slot.is-expanded')).toHaveAttribute('data-id', point.id);
+    await page.waitForTimeout(240);
+    await expect(page.locator('.card-slot.is-expanded')).toHaveAttribute('data-id', point.id);
+  }
+  expect(await page.evaluate(() => (window as any).handCopies)).toEqual([]);
+  expect(await page.evaluate(() => (window as any).handHidden)).toBe(0);
+  await page.mouse.move(24, 24, { steps: 12 }); await expect(page.locator('.card-slot.is-expanded')).toHaveCount(0);
+  await page.waitForTimeout(400);
+  await page.keyboard.press('ArrowDown'); await expect(page.locator('.card-slot.is-expanded')).toHaveCount(1);
+  await expect(page.locator('.card-slot.is-expanded .card-copy')).toBeFocused();
+  // Real pointer movement takes over from keyboard focus; leaving does not
+  // resurrect the previously keyboard-selected card.
+  await page.mouse.move(points[3].x, points[3].y, { steps: 8 });
+  await expect(page.locator('.card-slot.is-expanded')).toHaveAttribute('data-id', points[3].id);
+  await page.mouse.move(24, 24); await expect(page.locator('.card-slot.is-expanded')).toHaveCount(0);
+  const video = page.video(); await context.close(); await video?.saveAs('artifacts/pupa-hand-pointer-sweep.webm');
+});
+
+test('pulled card cannot intercept a neighboring resting region; its exposed tools still work', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' }); await page.setViewportSize({ width: 780, height: 900 });
+  await installHandFixture(page); await page.goto('/'); await expect(cards(page)).toHaveCount(7);
+  let crossing: { x: number; y: number; id: string } | null = null;
+  for (let active = 0; active < 7 && !crossing; active++) {
+    await page.getByTestId('copy-entry').nth(active).focus();
+    crossing = await cards(page).evaluateAll((elements, active) => {
+      const rects = elements.map(element => { const el = element as HTMLElement; return { el, id: el.dataset.id!, x: parseFloat(el.style.left) + el.offsetWidth / 2, y: parseFloat(el.style.top) + el.offsetHeight / 2, w: el.offsetWidth, h: el.offsetHeight, angle: parseFloat(el.style.getPropertyValue('--angle')) * Math.PI / 180 }; });
+      for (let y = 20; y < innerHeight - 20; y += 8) for (let x = 20; x < innerWidth - 20; x += 8) {
+        const owner = [...rects].reverse().find(r => { const dx = x - r.x, dy = y - r.y; return Math.abs(dx * Math.cos(r.angle) + dy * Math.sin(r.angle)) < r.w / 2 && Math.abs(-dx * Math.sin(r.angle) + dy * Math.cos(r.angle)) < r.h / 2; });
+        const hit = document.elementFromPoint(x, y);
+        if (owner && owner.id !== rects[active].id && hit?.closest('.card-slot') === rects[active].el && !hit.closest('.card-icon')) return { x, y, id: owner.id };
+      }
+      return null;
+    }, active);
+  }
+  expect(crossing).not.toBeNull();
+  await page.mouse.move(crossing!.x, crossing!.y);
+  await expect(page.locator('.card-slot.is-expanded')).toHaveAttribute('data-id', crossing!.id);
+  await page.waitForTimeout(250); await expect(page.locator('.card-slot.is-expanded')).toHaveAttribute('data-id', crossing!.id);
+  await page.locator('.card-slot.is-expanded [data-action="settings"]').click();
+  await expect(page.getByTestId('settings-dialog')).toBeVisible();
+  expect(await page.evaluate(() => (window as any).handCopies)).toEqual([]);
+  await page.keyboard.press('Escape');
+  await page.getByTestId('copy-entry').last().focus();
+  // Find an exposed pulled-out body point outside every resting rectangle.
+  const exposed = await cards(page).evaluateAll(elements => {
+    const active = elements.at(-1)! as HTMLElement;
+    const card = active.querySelector<HTMLElement>('.clip-card')!; const r = card.getBoundingClientRect();
+    for (let y = r.top + 20; y < r.bottom - 20; y += 8) for (let x = r.left + 20; x < r.right - 20; x += 8) {
+      const hit = document.elementFromPoint(x, y);
+      if (!hit?.closest('.card-copy') || hit.closest('.card-slot') !== active) continue;
+      const inHand = elements.some(element => { const el = element as HTMLElement; const a = parseFloat(el.style.getPropertyValue('--angle')) * Math.PI / 180, dx = x - parseFloat(el.style.left) - el.offsetWidth / 2, dy = y - parseFloat(el.style.top) - el.offsetHeight / 2; return Math.abs(dx * Math.cos(a) + dy * Math.sin(a)) <= el.offsetWidth / 2 && Math.abs(-dx * Math.sin(a) + dy * Math.cos(a)) <= el.offsetHeight / 2; });
+      if (!inHand) return { x, y };
+    }
+    return null;
+  });
+  expect(exposed).not.toBeNull(); await page.mouse.click(exposed!.x, exposed!.y);
+  await expect.poll(() => page.evaluate(() => (window as any).handCopies)).toEqual(['hand-7']);
+});
+
+
+for (const viewport of [{ width: 780, height: 900 }, { width: 780, height: 480 }, { width: 390, height: 640 }]) {
+  test(`local condensed numerals keep three-digit indices clear at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' }); await page.setViewportSize(viewport);
+    const fontRequests: string[] = []; page.on('request', request => { if (/\.(ttf|woff2?)(\?|$)/.test(request.url())) fontRequests.push(request.url()); });
+    await installHandFixture(page, 100); await page.goto('/');
+    await expect(cards(page)).toHaveCount(viewport.height < 600 ? 5 : 7);
+    await page.evaluate(() => document.fonts.ready);
+    const fonts = await page.evaluate(async () => (await document.fonts.load('28px "Anton"', '0123456789')).map(face => ({ family: face.family, status: face.status })));
+    expect(fonts).toHaveLength(1); expect(fonts[0].status).toBe('loaded');
+    for (let i = 0; i < 20; i++) await page.keyboard.press('PageDown');
+    await expect(page.locator('.card-number').last()).toHaveText('100');
+    const measurements = await page.locator('.card-copy').evaluateAll(elements => elements.map(element => {
+      const number = element.querySelector<HTMLElement>('.card-number')!, source = element.querySelector<HTMLElement>('.source-label')!, content = element.querySelector<HTMLElement>('.card-content')!;
+      return { numberRight: number.offsetLeft + number.offsetWidth, sourceLeft: source.offsetLeft, numberBottom: number.offsetTop + number.offsetHeight, contentTop: content.offsetTop, numberFont: getComputedStyle(number).fontFamily, contentFont: getComputedStyle(content).fontFamily };
+    }));
+    for (const item of measurements) { expect(item.numberRight).toBeLessThanOrEqual(item.sourceLeft); expect(item.numberBottom).toBeLessThanOrEqual(item.contentTop); expect(item.numberFont).toContain('Anton'); expect(item.contentFont).not.toContain('Anton'); }
+    expect(fontRequests.some(url => new URL(url).pathname.endsWith('/fonts/anton/Anton-Regular.ttf'))).toBeTruthy();
+    expect(fontRequests.every(url => new URL(url).origin === new URL(page.url()).origin)).toBeTruthy();
+  });
+}

@@ -1,3 +1,13 @@
+/* Unmodified OFL-1.1 display face, bundled offline. Only card indices use it. */
+@font-face {
+  font-family: "Anton";
+  src: url("/fonts/anton/Anton-Regular.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+0030-0039;
+}
+
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
   color: #584b64;
@@ -46,7 +56,7 @@ button svg, .icon svg { display: block; width: 100%; height: 100%; }
   box-shadow: -4px 9px 24px #53435e1c, 0 2px 5px #53435e08;
   transform-origin: 50% 50%;
   transform: none;
-  transition: transform .28s var(--ease), box-shadow .28s, border-color .2s;
+  transition: transform .18s var(--ease), box-shadow .18s, border-color .16s;
   will-change: transform;
 }
 .clip-card:before { content: ""; position: absolute; top: 15px; left: 19px; right: 19px; height: 1px; background: #fffdf8b3; pointer-events: none; }
@@ -258,3 +268,26 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 .danger-button { border-radius: 2px; }.shortcut-field input,.setting-row select { border-radius: 2px; border-color: #3c5556; }.privacy-warning,.form-error,.history-reduction-warning { border-radius: 2px; }
 .switch:checked+.toggle-track { background: #7c8e2d; }.switch:checked+.toggle-track:after { background: #e5ee42; }.slider-heading output { color: #8dd9df; }.fan-setting input[type=range] { accent-color: #dbe735; }
 .preview-launcher { background: #172026; border-color: #b2bd32; border-radius: 2px; color: #e3ed3f; }.preview-controls button { color: #99b28b; border-color: #475b36; border-radius: 1px; }
+
+/* Condensed card indices: an oversized instrument readout, not extra chrome.
+   Reserve the full three-digit index width so source labels never collide. */
+.card-number {
+  top: 22px;
+  color: var(--neon);
+  font-family: "Anton", Impact, "Arial Narrow", sans-serif;
+  font-size: 28px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: .025em;
+  white-space: nowrap;
+}
+.source-label { left: 82px; top: 32px; max-width: calc(100% - 164px); }
+@media(max-width:560px) {
+  .card-number { top: 19px; font-size: 24px; }
+  .source-label { left: 70px; top: 27px; max-width: calc(100% - 140px); }
+}
+@media(max-height:580px) {
+  .card-number { top: 16px; font-size: 20px; }
+  .source-label { left: 68px; top: 22px; max-width: calc(100% - 150px); }
+}

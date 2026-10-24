@@ -45,7 +45,7 @@
     "category": "Utility",
     "shortDescription": "Local-first clipboard card fan",
     "longDescription": "A local-first text clipboard manager with a card-fan interface.",
-    "copyright": "Copyright \u00a9 2026 kuro0315",
+    "copyright": "Copyright © 2026 kuro0315",
     "icon": [
       "../assets/icon.png",
       "../assets/icon.ico",
@@ -83,6 +83,10 @@
       "deb": {
         "section": "utils"
       }
+    },
+    "resources": {
+      "../public/fonts/anton/OFL.txt": "licenses/Anton-OFL.txt",
+      "../public/fonts/anton/NOTICE.txt": "licenses/Anton-NOTICE.txt"
     }
   }
 }
