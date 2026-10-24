@@ -1,0 +1,39 @@
+[package]
+name = "pupa"
+version = "0.2.0"
+description = "Private, local clipboard cards"
+authors = ["Pupa contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.90"
+
+[lib]
+name = "pupa_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "pupa"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[features]
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-clipboard-manager", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-single-instance"]
+# Explicit synthetic-only native test binary. Never included in distribution builds.
+smoke-test = ["desktop"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [], optional = true }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+regex = "1"
+base64 = "0.22"
+tempfile = "3"
+tauri = { version = "2", features = ["tray-icon", "image-png"], optional = true }
+tauri-plugin-clipboard-manager = { version = "2", optional = true }
+tauri-plugin-global-shortcut = { version = "2", optional = true }
+tauri-plugin-single-instance = { version = "2", optional = true }

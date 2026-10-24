@@ -97,7 +97,7 @@ mark=icon.resize((54,54),Image.Resampling.LANCZOS)
 header.paste(mark,(94,1),mark)
 header.save(BUILD/'installerHeader.bmp')
 
-# DMG positions match electron-builder.yml; arrow does not overlap either icon.
+# DMG positions match src-tauri/tauri.conf.json; arrow does not overlap either icon.
 for size,suffix in [(1,''),(2,'@2x')]:
     canvas=Image.new('RGB',(540*size,380*size),'#F9F6EE')
     draw=ImageDraw.Draw(canvas)

@@ -1,32 +1,37 @@
 {
   "name": "pupa",
-  "version": "0.1.0",
-  "description": "A little magic for your clipboard. Local-first desktop clipboard cards.",
+  "version": "0.2.0",
+  "description": "Local-first clipboard card fan.",
   "author": "kuro0315",
   "license": "MIT",
-  "main": "electron/main.cjs",
-  "desktopName": "jp.kuro0315.pupa.desktop",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "start": "npm run build && electron .",
+    "start": "tauri dev",
+    "tauri": "tauri",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/*.test.cjs",
+    "test": "npm run test:bridge && npm run test:core",
+    "test:core": "cargo test --locked --manifest-path src-tauri/Cargo.toml --no-default-features",
     "test:ui": "playwright test",
+    "test:native": "node scripts/desktop-smoke.cjs",
     "check": "npm run test && npm run build && npm run test:ui",
-    "dist": "npm run build && electron-builder --publish never",
-    "pack": "npm run build && electron-builder --dir --publish never"
+    "dist": "tauri build",
+    "pack": "tauri build --no-bundle",
+    "test:bridge": "node --test tests/tauri-bridge.test.cjs tests/state-order.test.cjs"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",
-    "electron": "45.0.0",
-    "electron-builder": "26.18.0",
     "typescript": "6.0.2",
-    "vite": "8.3.5"
+    "vite": "8.3.5",
+    "@tauri-apps/cli": "2.12.4"
   },
   "homepage": "https://github.com/kuro0315/Pupa",
   "repository": {
     "type": "git",
     "url": "https://github.com/kuro0315/Pupa.git"
-  }
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.4"
+  },
+  "type": "module"
 }

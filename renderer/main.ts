@@ -1,10 +1,14 @@
 import './style.css';
 import { icons } from './icons';
 import { createPreviewBridge } from './preview';
+import { createTauriBridge, isTauriRuntime } from './tauri';
+import { createStateReceiver } from './state-order';
 import type { ClipboardEntry, PupaBridge, Result, State } from './types';
 
-const preview = !window.pupa;
-const bridge: PupaBridge = window.pupa ?? createPreviewBridge();
+// Injected fixtures stay authoritative; browser previews never invoke native APIs.
+const preview = !window.pupa && !isTauriRuntime();
+const bridge: PupaBridge = window.pupa ?? (preview ? createPreviewBridge() : createTauriBridge());
+if (!preview) window.pupa = bridge;
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const icon = (name: keyof typeof icons) => icons[name];
 app.innerHTML = `
@@ -24,7 +28,7 @@ app.innerHTML = `
       <div id="settings-status" aria-live="polite"></div><div class="setting-row"><div><span class="setting-label">クリップボードの記録</span></div><button type="button" class="soft-button" id="pause-button">一時停止</button></div><div class="setting-group"><label class="setting-label" for="shortcut-input">呼び出すショートカット</label><div class="shortcut-field"><input id="shortcut-input" name="shortcut" spellcheck="false" autocomplete="off" required aria-describedby="shortcut-help"><button type="button" class="soft-button" id="record-shortcut">キーを記録</button></div><p class="field-help" id="shortcut-help">例: CommandOrControl+Shift+Space</p></div>
       <div class="setting-row"><div><label class="setting-label" for="history-limit">覚えておく枚数</label><p class="setting-description">ピン留めした手札も含めた上限です。</p></div><select id="history-limit" name="historyLimit"><option value="30">30 枚</option><option value="60">60 枚</option><option value="100">100 枚</option></select></div>
       <div class="history-reduction-warning" id="history-reduction-warning" hidden><p id="history-reduction-description"></p><label><input id="confirm-history-reduction" data-testid="confirm-history-reduction" type="checkbox">削除される可能性を確認しました</label></div>
-      <div class="setting-row fan-setting"><div class="slider-heading"><label class="setting-label" for="fan-spread">カードの開く角度</label><output id="fan-spread-value" for="fan-spread">42°</output></div><input id="fan-spread" data-testid="fan-spread-setting" type="range" min="20" max="55" step="1" value="42"><div class="slider-labels"><span>せまく</span><span>広く</span></div></div>
+      <div class="setting-row fan-setting"><div class="slider-heading"><label class="setting-label" for="fan-spread">カードの開く角度</label><output id="fan-spread-value" for="fan-spread">72°</output></div><input id="fan-spread" data-testid="fan-spread-setting" type="range" min="20" max="84" step="1" value="72"><div class="slider-labels"><span>せまく</span><span>広く</span></div></div>
       <div class="setting-row fan-setting"><div class="slider-heading"><label class="setting-label" for="fan-distance">画面の端からの距離</label><output id="fan-distance-value" for="fan-distance">0 px</output></div><input id="fan-distance" data-testid="fan-distance-setting" type="range" min="0" max="90" step="1" value="0"><div class="slider-labels"><span>近く</span><span>遠く</span></div><p class="setting-description">画面に収まる範囲に調整されます。</p></div>
       <label class="setting-row toggle-row"><span><span class="setting-label">収集時のアプリを記録（推定）</span><span class="setting-description">アプリ名とローカルのアイコンのみ。ウィンドウ名やURLは記録しません。</span></span><input class="switch" id="source-app" data-testid="source-app-setting" type="checkbox" name="sourceApp"><span class="toggle-track" aria-hidden="true"></span></label>
       <label class="setting-row toggle-row persistence-row"><span><span class="setting-label">次に開くときも、履歴を残す</span><span class="setting-description">オフなら、アプリ終了時に履歴が消えます。</span></span><input class="switch" id="persistence" type="checkbox" name="persistence" aria-describedby="persistence-warning"><span class="toggle-track" aria-hidden="true"></span></label>
@@ -132,23 +136,43 @@ function changePage(direction: number, focus = false) {
   pageOffset = next; hoverId = null; keyboardId = null; animateNext = false; renderCards();
   if (focus && shownEntries.length) selectCard(direction > 0 ? shownEntries.at(-1)!.id : shownEntries[0].id, true);
 }
-function fanGeometry() {
-  const configuredSpread = draftFan?.fanSpread ?? state?.settings.fanSpread ?? 42;
-  const configuredDistance = draftFan?.fanDistance ?? state?.settings.fanDistance ?? 0;
+function fanGeometry(count: number) {
   const width = window.innerWidth; const height = window.innerHeight;
   const compact = width <= 560;
-  const cardWidth = compact ? Math.min(380, width - 66, height * .62) : Math.min(475, width - 74, height * .62, (width - 96) / 1.22 - 20);
-  const cardHeight = Math.min(compact ? 236 : 270, height * .32);
-  // The pivot remains at the screen edge. Distance increases the radial reach,
-  // so constrain it by the enlarged card's left edge as well as angle/height.
-  const maxDistance = compact ? 0 : Math.min(90, Math.max(0, (width - 76) / 1.22 - cardWidth - 20));
-  const distance = Math.min(Math.max(0, configuredDistance), maxDistance);
-  let angle = Math.max(20, Math.min(55, configuredSpread));
-  const radius = cardWidth + (compact ? 16 : 20) + distance;
-  const room = height / 2 - 17;
-  while (angle > 0 && radius * Math.sin(angle * Math.PI / 180) + cardHeight / 2 * Math.cos(angle * Math.PI / 180) > room) angle -= .25;
+  const margin = compact ? 12 : 18;
+  const configuredSpread = draftFan?.fanSpread ?? state?.settings.fanSpread ?? 72;
+  const configuredDistance = draftFan?.fanDistance ?? state?.settings.fanDistance ?? 0;
+  const spread = Math.max(20, Math.min(84, configuredSpread));
+  const cardHeight = Math.min(compact ? 210 : 232, height * .3, (width - margin * 2) * .62);
+  // A rotated rectangle can be wider than the unrotated card. Reserve its
+  // complete diagonal so intermediate leaves also fit narrow displays.
+  const cardWidth = Math.min(compact ? 360 : 440, width - margin * 2 - 30, height * .66, Math.sqrt(Math.max(1, (width - margin * 2) ** 2 - cardHeight ** 2)));
+  const scale = Math.min(compact ? 1.1 : 1.22, (width - margin * 2) / cardWidth, (height - margin * 2) / cardHeight);
+  // Spreading the centers as well as the angles opens up the whole available
+  // work-area height. A fixed-radius pivot would leave tall displays half empty.
+  const fullness = Math.min(1, .45 + (spread - 20) / 52 * .55);
+  const countSpread = Math.min(1, Math.max(0, count - 1) / 4);
+  const distance = Math.max(0, Math.min(90, configuredDistance, width - margin * 2 - cardWidth * scale));
   stage.style.setProperty('--fan-distance', `${distance.toFixed(2)}px`);
-  return { angle: Math.max(0, angle), distance };
+  stage.style.setProperty('--card-width', `${cardWidth.toFixed(2)}px`);
+  stage.style.setProperty('--card-height', `${cardHeight.toFixed(2)}px`);
+  const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(high, value));
+  return Array.from({ length: count }, (_, index) => {
+    const position = count === 1 ? 0 : 1 - index / (count - 1) * 2;
+    const angle = position * spread * countSpread;
+    const radians = angle * Math.PI / 180;
+    const halfWidth = (cardWidth * Math.cos(radians) + cardHeight * Math.abs(Math.sin(radians))) / 2;
+    const halfHeight = (cardWidth * Math.abs(Math.sin(radians)) + cardHeight * Math.cos(radians)) / 2;
+    // Each visible leaf touches the same right-edge rail without clipping any
+    // corner. Its center can move vertically independently of its rotation.
+    const centerX = clamp(width - margin - distance - halfWidth, margin + halfWidth, width - margin - halfWidth);
+    const centerY = height / 2 - position * Math.max(0, height / 2 - margin - halfHeight) * fullness * countSpread;
+    const expandedHalfWidth = cardWidth * scale / 2;
+    const expandedHalfHeight = cardHeight * scale / 2;
+    const expandedX = clamp(centerX - (compact ? 18 : 42), margin + expandedHalfWidth, width - margin - expandedHalfWidth);
+    const expandedY = clamp(centerY, margin + expandedHalfHeight, height - margin - expandedHalfHeight);
+    return { angle, left: centerX - cardWidth / 2, top: centerY - cardHeight / 2, expandedX: expandedX - centerX, expandedY: expandedY - centerY, scale };
+  });
 }
 function updateHistoryWarning() {
   if (!state) return;
@@ -181,13 +205,14 @@ function renderCards() {
   if (!shownEntries.some((entry) => entry.id === hoverId)) hoverId = null;
   if (!shownEntries.some((entry) => entry.id === keyboardId)) keyboardId = null;
   deck.replaceChildren();
-  const geometry = fanGeometry();
-  const spread = shownEntries.length <= 1 ? 0 : Math.min(geometry.angle, (shownEntries.length - 1) * geometry.angle / 4);
+  const geometry = fanGeometry(shownEntries.length);
   shownEntries.forEach((entry, index) => {
-    const angle = shownEntries.length === 1 ? 0 : spread - (index / (shownEntries.length - 1)) * spread * 2;
+    const { angle, left, top, expandedX, expandedY, scale } = geometry[index];
     const slot = make('article', `card-slot${animateNext ? ' deal-in' : ''}`);
     slot.dataset.id = entry.id; slot.dataset.order = String(index + 1); slot.dataset.testid = 'clipboard-card'; slot.setAttribute('role', 'listitem');
     slot.style.setProperty('--angle', `${angle}deg`); slot.style.setProperty('--inverse-angle', `${-angle}deg`); slot.style.setProperty('--card-index', String(index)); slot.style.zIndex = String(index + 1);
+    slot.style.left = `${left.toFixed(2)}px`; slot.style.top = `${top.toFixed(2)}px`;
+    slot.style.setProperty('--expanded-x', `${expandedX.toFixed(2)}px`); slot.style.setProperty('--expanded-y', `${expandedY.toFixed(2)}px`); slot.style.setProperty('--expanded-scale', String(scale));
     const card = make('div', `clip-card color-${entry.color}${entry.pinned ? ' is-pinned' : ''}`);
     card.dataset.testid = 'fan-card';
     const source = entry.source?.kind === 'foreground' && typeof entry.source.name === 'string' && entry.source.name.trim() ? entry.source : undefined;
@@ -278,7 +303,7 @@ function openSettings() {
   $<HTMLSelectElement>('#history-limit').value = String(state.settings.historyLimit);
   $<HTMLInputElement>('#persistence').checked = state.settings.persistence;
   $<HTMLInputElement>('#source-app').checked = state.settings.sourceApp !== false;
-  $<HTMLInputElement>('#fan-spread').value = String(state.settings.fanSpread ?? 42);
+  $<HTMLInputElement>('#fan-spread').value = String(state.settings.fanSpread ?? 72);
   $<HTMLInputElement>('#fan-distance').value = String(state.settings.fanDistance ?? 0);
   reductionScope = ''; updateHistoryWarning(); updateFanDraft();
   $('#settings-error').hidden = true;
@@ -373,10 +398,11 @@ document.addEventListener('keydown', (event) => {
   } else if (event.key === 'PageDown' || event.key === 'PageUp') { event.preventDefault(); changePage(event.key === 'PageDown' ? capacity() : -capacity(), true); }
 });
 window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => renderCards(), 80); });
-const unsubscribeState = bridge.onState((next) => { state = next; render(); });
+const applyState = createStateReceiver((next) => { state = next; render(); });
+const unsubscribeState = bridge.onState(applyState);
 const unsubscribeShown = bridge.onShown(resetForShown);
 const unsubscribeSettings = bridge.onSettings?.(openSettings) ?? (() => {});
 window.addEventListener('pagehide', () => { unsubscribeState(); unsubscribeShown(); unsubscribeSettings(); clearTimeout(toastTimer); clearTimeout(copiedTimer); clearTimeout(previewTimer); clearTimeout(resizeTimer); }, { once: true });
-void bridge.getState().then((next) => { state = next; render(); stage.focus({ preventScroll: true }); }).catch(() => {
+void bridge.getState().then((next) => { applyState(next); stage.focus({ preventScroll: true }); }).catch(() => {
   $('#empty-state').hidden = false; $('#empty-label').textContent = '履歴を読み込めませんでした'; showToast('Pupaを再起動してください。', true);
 });

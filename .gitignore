@@ -7,3 +7,6 @@ playwright-report/
 .DS_Store
 *.log
 .env*
+
+src-tauri/target/
+src-tauri/gen/schemas/

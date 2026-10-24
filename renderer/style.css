@@ -23,17 +23,13 @@ button svg, .icon svg { display: block; width: 100%; height: 100%; }
 .fan-backdrop { position: absolute; inset: 0; width: 100%; height: 100%; background: transparent; cursor: default; z-index: 0; }
 .fan-viewport { position: absolute; inset: 0; z-index: 1; pointer-events: none; transition: opacity .24s, transform .38s var(--ease); }
 .card-deck { position: absolute; inset: 0; pointer-events: none; }
-/* A stable, rotated hit area remains under the pointer while its child card
-   straightens. The common pivot sits four pixels beyond the right display edge. */
+/* Stable rotated hit areas keep the complete resting fan selectable while a
+   child straightens. Viewport-aware positions come from the shared geometry. */
 .card-slot {
-  --card-width: min(475px, calc(100vw - 74px), 62dvh);
-  --card-height: min(270px, 32dvh);
   position: absolute;
   width: var(--card-width);
   height: var(--card-height);
-  right: 16px;
-  top: calc(50% - var(--card-height) / 2);
-  transform-origin: calc(100% + 20px) 50%;
+  transform-origin: 50% 50%;
   transform: rotate(var(--angle));
   pointer-events: auto;
   isolation: isolate;
@@ -48,7 +44,7 @@ button svg, .icon svg { display: block; width: 100%; height: 100%; }
   border-radius: 17px;
   background: var(--card-color);
   box-shadow: -4px 9px 24px #53435e1c, 0 2px 5px #53435e08;
-  transform-origin: calc(100% + 20px) 50%;
+  transform-origin: 50% 50%;
   transform: none;
   transition: transform .28s var(--ease), box-shadow .28s, border-color .2s;
   will-change: transform;
@@ -59,7 +55,7 @@ button svg, .icon svg { display: block; width: 100%; height: 100%; }
 .color-lavender { --card-color: #eee6f5; --card-border: #d7c9e3; }
 .color-rose { --card-color: #f4e7e1; --card-border: #e6d5ce; }
 .card-slot.is-expanded .clip-card {
-  transform: rotate(var(--inverse-angle)) translateX(-64px) scale(1.22);
+  transform: rotate(var(--inverse-angle)) translate(var(--expanded-x), var(--expanded-y)) scale(var(--expanded-scale));
   border-color: #bda5d1;
   box-shadow: -8px 17px 38px #53435e2b, 0 3px 8px #53435e0d;
 }
@@ -127,9 +123,7 @@ button svg, .icon svg { display: block; width: 100%; height: 100%; }
 .text-button { background: transparent; padding: 0; color: #a096aa; font-size: 10px; }
 .text-button:hover { color: #776181; text-decoration: underline; text-underline-offset: 3px; }
 @media(max-width:560px) {
-  .card-slot { --card-width: min(380px, calc(100vw - 66px),62dvh); --card-height: min(236px,32dvh); right: 12px; transform-origin: calc(100% + 16px) 50%; }
-  .clip-card { transform-origin: calc(100% + 16px) 50%; border-radius: 14px; }
-  .card-slot.is-expanded .clip-card { transform: rotate(var(--inverse-angle)) translateX(-17px) scale(1.10); }
+  .clip-card { border-radius: 14px; }
   .card-copy { padding: 50px 21px 43px; }
   .card-content { font-size: 14px; }
   .card-slot.is-expanded .card-content { font-size: 16px; }
@@ -149,22 +143,19 @@ button svg, .icon svg { display: block; width: 100%; height: 100%; }
   .card-content { font-size: 12px; line-height: 1.7; }.card-slot.is-expanded .card-content { font-size: 14px; }
   .content-code { font-size: 9px; }.card-slot.is-expanded .content-code { font-size: 10px; }
   .card-time { bottom: 17px; }.card-bottom-tools { bottom: 9px; }
-  .card-slot.is-expanded .clip-card { transform: rotate(var(--inverse-angle)) translateX(-35px) scale(1.16); }
   .pupa-dialog { max-height: calc(100dvh - 20px); }
 }
 @media(max-width:380px) {
   .setting-label { font-size: 11px; }.setting-description { font-size: 9px; }
   .shortcut-field { flex-wrap: wrap; }.shortcut-field input { width: 100%; flex-basis: 100%; }
   .dialog-actions { gap: 6px; flex-wrap: wrap; }.soft-button,.primary-button,.danger-button { font-size: 10px; padding: 9px 10px; }
-  .card-slot.is-expanded .clip-card { transform: rotate(var(--inverse-angle)) translateX(-10px) scale(1.08); }
 }
 @media(prefers-reduced-motion:reduce) {
   *,*:before,*:after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   /* Preserve the requested resting fan, but make its appearance and focus instant. */
 }
 
-/* Cyberpunk skin. Geometry, transparent native exterior, and interactions stay
-   identical to the accepted fan; neon is limited to edges and tiny details. */
+/* Cyberpunk skin: neon is limited to edges and tiny details. */
 :root {
   font-family: "SFMono-Regular", Consolas, "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, monospace;
   color: #d7e6ed;
@@ -223,10 +214,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 @media(max-width:560px) { .source-label { left: 47px; top: 21px; max-width: calc(100% - 130px); font-size: 7px; line-height: 12px; }.source-watermark { right: 28px; width: 105px; height: 105px; } }
 @media(max-height:580px) { .source-label { top: 17px; font-size: 7px; line-height: 11px; }.source-watermark { right: 24px; width: 82px; height: 82px; } }
 
-/* User-adjustable radius keeps the pivot fixed at the right screen edge. */
-.fan-stage { --fan-distance: 0px; }
-.card-slot { --card-width: min(475px, calc(100vw - 74px),62dvh,calc((100vw - 96px)/1.22 - 20px)); right: calc(16px + var(--fan-distance)); transform-origin: calc(100% + 20px + var(--fan-distance)) 50%; }
-.clip-card { transform-origin: calc(100% + 20px + var(--fan-distance)) 50%; }
+/* Settings adjust the open fan directly; all dimensions and edge clamps share
+   one renderer calculation, including on short or unusually tall displays. */
 .fan-setting { display: block; }
 .slider-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .slider-heading output { font-size: 10px; color: #78c8d7; font-variant-numeric: tabular-nums; }
@@ -237,7 +226,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 .history-reduction-warning p { font-size: 10px; line-height: 1.8; margin: 0 0 10px; }
 .history-reduction-warning label { display: flex; align-items: flex-start; gap: 7px; font-size: 10px; line-height: 1.7; cursor: pointer; }
 .history-reduction-warning input { margin: 3px 0 0; accent-color: #d2a770; }
-@media(max-width:560px) { .card-slot { --card-width: min(380px,calc(100vw - 66px),62dvh); right: 12px; transform-origin: calc(100% + 16px) 50%; }.clip-card { transform-origin: calc(100% + 16px) 50%; } }
 
 /* Original yellow/black terminal treatment: clipped industrial edges and
    restrained cyan signals, without game branding, flashing, or added chrome. */

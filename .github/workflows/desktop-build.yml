@@ -1,4 +1,4 @@
-name: Build desktop apps
+name: Build Tauri desktop apps
 
 on:
   push:
@@ -6,7 +6,8 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Build artifacts are not public Releases. No job receives write permission.
+# Development artifacts only. No release creation, upload, signing credentials,
+# publishing token, or write permission is used by any job.
 permissions:
   contents: read
 
@@ -18,25 +19,34 @@ jobs:
   desktop:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 35
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Windows x64
             os: windows-latest
-            platform: windows
-            args: --win --x64
-          - name: macOS Apple Silicon and Intel
-            os: macos-latest
-            platform: macos
-            args: --mac --arm64 --x64
+            platform: windows-x64
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - name: macOS Apple Silicon
+            os: macos-15
+            platform: macos-arm64
+            target: aarch64-apple-darwin
+            bundles: dmg
+          - name: macOS Intel
+            os: macos-15-intel
+            platform: macos-x64
+            target: x86_64-apple-darwin
+            bundles: dmg
           - name: Linux x64
             os: ubuntu-24.04
-            platform: linux
-            args: --linux --x64
+            platform: linux-x64
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
     env:
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CARGO_TERM_COLOR: always
+      PUPA_BUILD_TARGET: ${{ matrix.target }}
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -47,27 +57,47 @@ jobs:
         with:
           node-version: '24'
           cache: npm
-      - name: Install Linux packaging tools
+      - name: Set up stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+      - name: Install Linux build and isolated-desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libopenjp2-tools xvfb
-      - name: Install locked dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb webkit2gtk-driver dbus-x11
+      - name: Install locked npm dependencies
         run: npm ci
-      - name: Run tests
+      - name: Run Rust core and frontend bridge tests
         run: npm test
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Check locked desktop Rust build
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
       - name: Build renderer
         run: npm run build
       - name: Install UI test browser
         if: runner.os == 'Linux'
         run: npx playwright install --with-deps chromium
-      - name: Verify browser UI
+      - name: Verify browser UI and capture screenshots/video
         if: runner.os == 'Linux'
         run: npm run test:ui
-      - name: Smoke-test native Electron with synthetic clipboard
+      - name: Install native WebDriver bridge
         if: runner.os == 'Linux'
-        run: xvfb-run -a node scripts/desktop-smoke.cjs
-      - name: Upload UI screenshots
+        run: cargo install tauri-driver --locked
+      - name: Build synthetic-only native smoke binary
+        if: runner.os == 'Linux'
+        run: npm run tauri -- build --debug --no-bundle --features smoke-test --target ${{ matrix.target }} -- --locked
+      - name: Smoke-test real Tauri in isolated Linux desktop
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          PUPA_ISOLATED_DESKTOP: '1'
+        run: xvfb-run -a -s '-screen 0 1440x1000x24' dbus-run-session -- npm run test:native -- src-tauri/target/${{ matrix.target }}/debug/pupa
+      - name: Upload UI and native Tauri evidence
         if: always() && runner.os == 'Linux'
         uses: actions/upload-artifact@v7
         with:
@@ -76,10 +106,10 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
           compression-level: 0
-      - name: Package native desktop apps (not signed for distribution)
-        run: npm run dist -- ${{ matrix.args }} --publish never
-      - name: Generate checksums
-        run: node scripts/checksums.cjs
+      - name: Package production desktop apps (no smoke feature, no signing credentials)
+        run: npm run dist -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --ci -- --locked
+      - name: Collect installers, sizes, and SHA-256 checksums
+        run: node scripts/checksums.cjs src-tauri/target/${{ matrix.target }}/release/bundle release
       - name: Upload development installers
         uses: actions/upload-artifact@v7
         with:
@@ -90,7 +120,7 @@ jobs:
           path: |
             release/*.exe
             release/*.dmg
-            release/*.zip
             release/*.AppImage
             release/*.deb
             release/SHA256SUMS.txt
+            release/installer-manifest.json

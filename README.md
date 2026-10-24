@@ -1,149 +1,64 @@
-<p align="center"><img src="assets/icon.svg" width="112" alt="Pupa の蝶のアイコン"></p>
-<h1 align="center">Pupa</h1>
-<p align="center"><strong>コピーした言葉に、ちいさな魔法を。</strong><br>画面の右端からカードがふわっとひらく、ローカルファーストのクリップボードマネージャー。</p>
+<p align="center">
+  <img src="docs/media/pupa-wordmark.svg" width="100%" alt="PUPA — Your clipboard. Unfolded.">
+</p>
 
-Pupa は Electron + TypeScript で動く、本物のデスクトップアプリです。Web ページを開いたままにする必要はありません。普段は隠れていて、呼び出すとカードだけが画面右端から扇形に広がります。マウスを重ねたカードが大きくなり、内容を読みやすく表示します。
+<p align="center"><strong>隠れて、ひらいて、もう一度コピー。</strong><br>
+画面の右端から現れる、クリップボードのカードデッキ。</p>
 
-## できること
+<p align="center">
+  <a href="#download">ダウンロード</a> ·
+  <a href="#use">使い方</a> ·
+  <a href="docs/PRIVACY.md">プライバシー</a> ·
+  <a href="docs/DEVELOPMENT.md">開発する</a>
+</p>
 
-- **いつでもカードをひらく。** macOS は `⌘ ⇧ Space`、Windows / Linux は `Ctrl Shift Space`。呼び出しキーは設定から変更できます。
-- **探して、コピー。** テキスト・URL・コードを検索し、カードを選ぶとクリップボードへ戻し、成功したときだけ画面を閉じます。貼り付け先に戻り、いつもの `⌘ V` / `Ctrl V` で貼り付けます。
-- **好きなものを残す。** ピン留め、個別削除、全履歴削除。履歴は標準 60 件、最大 100 件です。
-- **カードの開き方を調整。** カードの小さな歯車から、履歴 30 / 60 / 100 件、扇の角度 20–55°、カード間の距離 0–90 px を選べます。画面に収まるよう距離は自動調整されます。プレビューはキャンセルで元に戻ります。
-- **アプリの手がかり。** 検出時の前面アプリ名と、取得できたローカルアイコンを薄く表示します。「推定」であり、コピー元の保証ではありません。設定で無効にできます。
-- **必要なときだけ記録。** 記録の一時停止と再開、トレイ / メニューバーからの呼び出し。
-- **保存しないのが初期設定。** 履歴はメモリ内だけ。終了・再起動すると消えます。必要な場合だけ、設定でローカル保存を有効にできます。
-- **通信しない。** アカウント、クラウド同期、広告、テレメトリー、外部 AI、更新確認の通信はありません。
+<p align="center"><a href="https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml">実画面・アニメーションは CI の UI Artifacts で確認できます</a></p>
 
-> 自動貼り付けやキー入力の代行は行いません。Pupa のためにアクセシビリティ権限を与える必要もありません。
+**必要なときだけ、手元に。** 普段は非表示。呼び出すとカードが扇形に広がり、重ねたカードだけ大きくなる。コピーできたら、また隠れます。
 
-## インストール
+**自分のデッキに。** 小さな歯車から、履歴の数・扇の角度・画面端からの距離を調整。アプリ名と薄いアイコンは、検出時の前面アプリを手がかりに表示します。
 
-**現在のビルドは開発・検証用です。署名済みの正式リリースではありません。**
+**Tauri + Rust。** Electron を同梱せず、OS の WebView を使うデスクトップアプリ。
 
-このリポジトリには Windows / macOS / Linux のインストーラーを生成する設定と CI があります。CI が成功すると、[Actions](https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml) の該当実行に OS ごとの Artifacts が作られます。まだ成功した実行がない場合、ダウンロードできるインストーラーはありません。Artifacts と [Releases](https://github.com/kuro0315/Pupa/releases) は別物で、CI は Release を作成・公開しません。
+**端末の中だけ。** アカウントも通信も不要。履歴は初期設定ではメモリだけ、ファイルへの保存は自分で選べます。
 
-| 使用しているパソコン | 選ぶファイル |
-| --- | --- |
-| Windows x64 | `Pupa-<version>-windows-x64-setup.exe` |
-| Mac / Apple Silicon | `Pupa-<version>-mac-arm64.dmg` |
-| Mac / Intel | `Pupa-<version>-mac-x64.dmg` |
-| Linux x64 | `Pupa-<version>-linux-x86_64.AppImage` または `Pupa-<version>-linux-amd64.deb` |
+<a id="download"></a>
+## Download
 
-1. [Actions](https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml) で、使用したいコミットの成功した実行を開きます。
-2. Artifacts から `Pupa-windows-…` / `Pupa-macos-…` / `Pupa-linux-…` をダウンロードし、ZIP を展開します。GitHub へのサインインとリポジトリの読み取り権限が必要です。保存期間は 14 日です。
-3. 自分の OS と CPU に合うファイルを選びます。`SHA256SUMS.txt` も同梱しています。
-4. [OS 別インストールガイド](docs/INSTALL.md) を確認してください。
+| Windows | macOS | Linux |
+| :--- | :--- | :--- |
+| [↓ x64 インストーラー](https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml) | [↓ Apple Silicon / Intel](https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml) | [↓ x64 AppImage / deb](https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml) |
+| `.exe` | CPU に合う `.dmg` を選択 | `.AppImage` または `.deb` |
 
-### 署名について、大切なお知らせ
+**v0.2.0 · Tauri + Rust 開発ビルド。未署名・未公証です。** OS によって起動をブロックされる場合があります。保護を無効化せず、[インストールガイド](docs/INSTALL.md)を確認してください。
 
-このプロジェクトには Windows の署名資格情報も、Apple Developer ID / notarization の資格情報も設定していません。**Windows SmartScreen や macOS Gatekeeper が警告・ブロックする可能性があります。** OS の保護を無効にしたり、警告を迂回したりしないでください。普段使いの配布版には、運営者による署名と macOS の公証、各 OS の実機検証が必要です。ハッシュの一致だけで開発元の信頼性が証明されるわけではありません。
+ダウンロードには GitHub へのサインインが必要です。Actions の成功した実行から、自分の OS の Artifacts を選びます。成果物の保存期間は14日です。正式 Release はまだ公開していません。
 
-安全な一般配布に向けた残作業は [配布チェックリスト](docs/DISTRIBUTION.md) にまとめています。
+<a id="use"></a>
+## Copy. Call. Click.
 
-## 使いはじめる
+1. **コピーする。** 起動後にコピーしたテキスト・リンク・コードが履歴に入ります。
+2. **呼び出す。** Mac は <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>Space</kbd>。Windows / Linux は <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>Space</kbd>。
+3. **カードをクリック。** その内容を再コピーして閉じます。貼り付け先でいつもの貼り付け操作を。
 
-1. Pupa を起動します。起動する前からクリップボードに入っていた内容は取り込みません。
-2. 好きな文章をコピーします。約 700 ms ごとに変更を検出します。
-3. ショートカット、またはトレイから Pupa をひらきます。
-4. カードを選んで再コピーし、貼り付け先で通常の貼り付け操作をします。
-5. パスワード、認証コード、秘密鍵などを扱う前は記録を一時停止してください。
+<kbd>Esc</kbd> で閉じる · 矢印キーで選ぶ · <kbd>Enter</kbd> でコピー · <kbd>Ctrl / ⌘</kbd> <kbd>F</kbd> で検索。歯車からキー変更、一時停止、履歴削除もできます。
 
-URL もコードもテキストとして扱います。URL を自動で開いたり、コードを実行したりはしません。ピンも履歴件数に含みます。現在の件数より小さい上限に変更するときは、ピンを含む削除の確認が必要です。上限に達した場合はピン以外の古い項目を優先して削除し、全項目がピン留めされている場合は最も古いピンも削除対象になります。
+<details>
+<summary><strong>デッキの設定を見る</strong></summary>
+<br>
+設定画面の実画像は、同じ CI の UI Artifacts に含まれます。
 
-### カードだけで操作する
+履歴は **30 / 60 / 100 件**。扇の角度は **20–84°**、画面端からの距離は **0–90 px**。画面に収まる範囲に調整されます。上限を減らして既存履歴を削除するときは確認が必要です。
+</details>
 
-通常画面には見出しやサイドバーを表示しません。カードにマウスを重ねると拡大し、小さな操作アイコンが現れます。
+## Small print
 
-- 矢印キー: カードを選んで拡大。Enter: 再コピー。Esc: 閉じる。
-- ホイール / PageUp・PageDown: 表示する履歴を移動。
-- `Ctrl / ⌘ F` または `/`: 必要なときだけ検索を開く。
-- `,` またはカードの設定アイコン、トレイの「設定」: 設定を開く。
-- 透明な余白をクリック、または呼び出しショートカットを再度押す: 閉じる。
+- **テキスト専用。** 画像・ファイル・書式保存、自動貼り付けは非対応。
+- **アプリ情報は推定。** コピー元を保証しません。取得できない環境は「アプリ不明」。Wayland では機能制限があります。
+- **秘密を扱う前は一時停止。** 秘密の自動判定は保証しません。任意の履歴保存は暗号化されません。
 
-## プライバシーと制約
+[プライバシーと制約](docs/PRIVACY.md) · [OS 別インストール](docs/INSTALL.md) · [開発・テスト](docs/DEVELOPMENT.md) · [正式配布までのチェックリスト](docs/DISTRIBUTION.md)
 
-- **画像、ファイル、HTML / RTF などの書式は非対応。** テキスト表現がある場合だけ、そのプレーンテキストを扱います。
-- アプリ情報は macOS / Windows で名前とローカルアイコン、Linux X11 で名前のみを取得できる場合があります。Wayland、制限された環境、応答時間超過では「アプリ不明」です。ウィンドウタイトル、閲覧中 URL、プロセスのコマンドラインを記録せず、ネットからアイコンを取得しません。
-- **完全な記録ではありません。** 短い間隔での連続コピー、アプリ側の独自クリップボード形式、OS の制限によって取りこぼすことがあります。
-- 1 件あたり UTF-8 で 64 KiB、履歴全体で 2 MiB が上限です。大きすぎる内容は履歴に入りません。
-- 一時停止中はクリップボードを読みません。再開時の既存内容も取り込まず、次の変更から記録します。対応 OS の画面ロック / サスペンド通知後も既存内容をスキップします。画面ロック通知は macOS / Windows のみで、Linux ではロック前に手動で一時停止してください。
-- **秘密の自動判定は保証しません。** 対応する macOS アプリの concealed / transient マーカーは可能な範囲で尊重しますが、マーカーがないパスワードや認証コードは通常のテキストと区別できません。
-- ローカル保存は任意で、**暗号化されていないプレーンテキスト**です。端末の他のソフトウェア、バックアップ、同じアカウントを使う人が読める可能性があります。詳細は [プライバシーとセキュリティ](docs/PRIVACY.md) を確認してください。
-- Linux Wayland では、クリップボード監視・グローバルショートカット・画面右端への位置指定がコンポジターやデスクトップポータルに左右されます。対応しない環境では X11 セッションでの利用を推奨します。トレイが表示されない場合はアプリランチャーから再度 Pupa を起動してください。
-- 自動起動、同期、自動更新はありません。更新する場合は新しい配布物を確認して手動で入れ替えます。
+---
 
-## 開発する
-
-必要なもの: Node.js 24、npm、Git。デスクトップ動作の確認には GUI セッションが必要です。依存関係と Electron の取得時、およびパッケージ生成時にはネット接続が必要ですが、完成したアプリの利用には不要です。
-
-```sh
-git clone --branch feat/pupa-clipboard-cards https://github.com/kuro0315/Pupa.git
-cd Pupa
-npm ci
-npm start
-```
-
-```sh
-npm test
-npm run typecheck
-npm run build
-```
-
-`npm start` はレンダラーをビルドして Electron を起動します。`npm run dev` は Vite のブラウザープレビューのみで、OS の機能を動かすコマンドではありません。
-
-ブラウザー用の UI 検証:
-
-```sh
-npx playwright install chromium
-npm run test:ui
-```
-
-ブラウザーで見る UI はプレビューです。OS のクリップボード監視、トレイ、グローバルショートカットは Electron 上でのみ動作します。ブラウザーの成功をネイティブ動作の確認に置き換えないでください。
-
-### インストーラーを生成する
-
-最初に `npm ci` と `npm run build` を実行し、対象 OS 上で次を実行してください。出力は `release/` です。
-
-```sh
-# Windows x64: NSIS installer
-npm run dist -- --win --x64 --publish never
-
-# macOS: Apple Silicon と Intel の DMG / ZIP
-npm run dist -- --mac --arm64 --x64 --publish never
-
-# Linux x64: AppImage / deb
-npm run dist -- --linux --x64 --publish never
-
-# 任意: Windows のポータブル版
-npm run dist -- --win portable --x64 --publish never
-
-# 同梱ファイルのハッシュ
-node scripts/checksums.cjs
-```
-
-CI は各 OS のランナーでテスト・型検査・ビルド・パッケージ生成を実行し、Linux では UI 検証も行います。署名鍵なしで動く開発用構成であり、タグ、Release、公開アップロード、自動マージは行いません。
-
-### 構成
-
-```text
-electron/                 Electron main / preload と履歴管理
-renderer/                 TypeScript + CSS のカード UI
-assets/                   オリジナルアイコンとトレイ画像
-build/                    インストーラー用画像
-scripts/                  アイコン再生成・チェックサム
-docs/                     インストール・プライバシー・配布ガイド
-electron-builder.yml      OS ごとのパッケージ設定
-.github/workflows/        ネイティブ OS のビルド CI
-```
-
-Electron 45、Vite 8、TypeScript、electron-builder 26 を使用します。正確なバージョンは `package-lock.json` に固定しています。アイコンは Pupa 専用のオリジナルです。必要に応じて Python 3 と Pillow を用意し、`python scripts/generate-icons.py` で再生成できます。通常のアプリビルドには不要です。
-
-## 技術資料
-
-- [Electron clipboard](https://www.electronjs.org/docs/latest/api/clipboard)
-- [Electron globalShortcut / Wayland](https://www.electronjs.org/docs/latest/api/global-shortcut)
-- [electron-builder: OS ごとのビルド条件](https://www.electron.build/v26/docs/features/multi-platform-build/)
-- [electron-builder: コード署名](https://www.electron.build/v26/docs/features/code-signing/)
-- [electron-builder: Linux desktop identity](https://www.electron.build/v26/docs/linux/)
-- [GitHub: Artifacts のダウンロード](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)
+[ビルド・検証状況](https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml) · [MIT](LICENSE)

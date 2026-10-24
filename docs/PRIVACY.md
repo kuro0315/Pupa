@@ -8,7 +8,7 @@ Pupa はクリップボードのテキストを扱うアプリです。コピー
 - 設定は端末内に保存します。
 - 起動時点のクリップボードは初期値として扱い、履歴に取り込みません。
 - 記録の一時停止中はクリップボードを読みません。再開時も現在の値を飛ばし、次の変更から取得します。
-- 画面ロック・サスペンド中の記録を止め、復帰時に現在の内容を取り込みません。OS が対応するイベントを通知することが前提です。Electron の画面ロック通知は macOS / Windows のみです。Linux ではロック前に手動で記録を一時停止してください。
+- 画面ロック・サスペンド中の記録を止め、復帰時に現在の内容を取り込みません。OS が対応するイベントを通知することが前提です。画面ロックの検出は OS の対応と状態取得に依存します。Linux ではロック前に手動で記録を一時停止してください。
 
 ## 記録する内容
 
@@ -54,15 +54,15 @@ macOS では、他のアプリが付ける concealed / transient のクリップ
 
 ## 保存先と削除
 
-Electron の `app.getPath('userData')` 配下に `settings.json` と、保存を有効にした場合だけ `history.json` を置きます。書き込みの途中では `.tmp` ファイルを使用します。
+Tauri の `app_data_dir` 配下に `settings.json` と、保存を有効にした場合だけ `history.json` を置きます。書き込みの途中では `.tmp` ファイルを使用します。
 
 通常の場所は以下です。OS の環境変数・設定・アプリの実行名によって異なる場合があります。
 
 | OS | 通常の保存先 |
 | --- | --- |
-| Windows | `%APPDATA%/Pupa/` |
-| macOS | `~/Library/Application Support/Pupa/` |
-| Linux | `$XDG_CONFIG_HOME/Pupa/`、未設定時は `~/.config/Pupa/` |
+| Windows | `%APPDATA%/jp.kuro0315.pupa/` |
+| macOS | `~/Library/Application Support/jp.kuro0315.pupa/` |
+| Linux | `$XDG_DATA_HOME/jp.kuro0315.pupa/`、未設定時は `~/.local/share/jp.kuro0315.pupa/` |
 
 履歴を消すとき:
 
@@ -77,14 +77,14 @@ Electron の `app.getPath('userData')` 配下に `settings.json` と、保存を
 - テレメトリー、解析、広告、クラウド同期、自動更新のネットワーク処理はありません。
 - 権限を使って元のアプリにキー入力したり、自動で貼り付けたりしません。
 - 通常の使用で macOS のアクセシビリティ権限は不要です。
-- Linux Wayland のグローバルショートカットでは、OS のデスクトップポータルがユーザー確認を表示する場合があります。
-- ビルド時の npm・Electron・electron-builder のダウンロードは開発ツールの通信であり、完成アプリの通常動作とは別です。
+- Linux Wayland ではグローバルショートカットや監視、配置に制限があります。動作しない場合は X11 を使用してください。
+- ビルド時の npm・Cargo・Tauri のダウンロード、およびインストール時の OS WebView / 依存ライブラリーの取得は、完成アプリの通常動作とは別です。
 
 ## アプリの保護
 
-レンダラーと Node.js を分離し、プリロードが公開する限定された API だけで操作します。コピー内容を HTML として実行せず、テキストとして表示します。アプリのウィンドウから意図しない外部ページを開かせません。
+Rust が OS 機能と履歴を管理し、レンダラーは検証された限定コマンドだけで操作します。任意ファイル・シェル・HTTP・クリップボードの JavaScript 権限は付与しません。コピー内容を HTML として実行せず、テキストとして表示します。アプリのウィンドウから意図しない外部ページを開かせません。
 
-ただし、Electron と OS、実行端末が侵害されていないことまでは保証できません。機密情報を扱う場合は永続保存を無効のままにし、記録を止める運用を優先してください。
+ただし、Tauri・OS の WebView と OS、実行端末が侵害されていないことまでは保証できません。機密情報を扱う場合は永続保存を無効のままにし、記録を止める運用を優先してください。
 
 ## 不具合の報告
 
@@ -92,9 +92,6 @@ Electron の `app.getPath('userData')` 配下に `settings.json` と、保存を
 
 ## 技術的な参考資料
 
-- [Electron clipboard](https://www.electronjs.org/docs/latest/api/clipboard)
-- [Electron app.getPath](https://www.electronjs.org/docs/latest/api/app#appgetpathname)
-- [Electron セキュリティガイド](https://www.electronjs.org/docs/latest/tutorial/security)
-- [Electron globalShortcut](https://www.electronjs.org/docs/latest/api/global-shortcut)
+[Tauri clipboard](https://v2.tauri.app/plugin/clipboard/) · [Tauri app data directory](https://docs.rs/tauri/latest/tauri/path/struct.PathResolver.html#method.app_data_dir) · [Tauri security](https://v2.tauri.app/security/) · [Tauri global shortcut](https://v2.tauri.app/plugin/global-shortcut/)
 
-画面ロック通知の対応範囲: [Electron powerMonitor](https://www.electronjs.org/docs/latest/api/power-monitor)
+0.1 Electron 版の履歴は自動で読み込みません。旧版のデータは旧保存先に残る場合があります。

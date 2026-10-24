@@ -24,6 +24,8 @@ export interface Settings {
   fanDistance?: number;
 }
 export interface State {
+  /** Native snapshot sequence; optional only for browser previews and fixtures. */
+  revision?: number;
   entries: ClipboardEntry[];
   settings: Settings;
   paused: boolean;

@@ -1,66 +1,55 @@
 # 開発ビルドと正式配布
 
-## このリポジトリで自動化していること
+## CI が行うこと
 
-`Build desktop apps` は push、pull request、手動実行で動きます。各 OS のネイティブランナーで、ロック済み依存関係のインストール、ユニットテスト、型検査、レンダラーのビルド、パッケージ生成を実行します。Linux では Chromium 上の UI テストも行います。
+Tauri 2 + Rust のネイティブビルドを OS ごとに行います。`Build Tauri desktop apps` は PR、main への push、手動実行で動きます。npm / Cargo はロックファイルを使用し、Rust コアと bridge のテスト、型検査、デスクトップコードのコンパイル、パッケージ生成を検証します。
 
 | ランナー | 出力 |
 | --- | --- |
-| Windows | x64 NSIS インストーラー |
-| macOS | arm64 / x64 の DMG と ZIP |
-| Linux | x64 AppImage と deb |
+| Windows x64 | NSIS インストーラー |
+| macOS Apple Silicon | arm64 DMG |
+| macOS Intel | x64 DMG |
+| Ubuntu 24.04 x64 | AppImage / deb |
 
-成果物と SHA-256 を GitHub Actions Artifacts に 14 日保存します。GitHub Releases、ストア、自動更新サーバーなどへの公開はしません。GitHub token は `contents: read` のみで、checkout は資格情報を残しません。
+Linux では Chromium の UI テストに加え、別途 Tauri + WebKitGTK のネイティブ smoke を行い、それぞれの実スクリーンショットを保存します。ネイティブ smoke は隔離した Xvfb / D-Bus とテスト専用バイナリを使用し、実ユーザーのクリップボード・前面アプリを読みません。配布バイナリは `smoke-test` feature なしで別にビルドします。
 
-すべてを 1 台の OS から生成・検証できる前提にしません。とくに macOS のコード署名は macOS が必要です。詳細は [electron-builder のマルチプラットフォーム手順](https://www.electron.build/v26/docs/features/multi-platform-build/) を参照してください。
+成果物、`SHA256SUMS.txt`、ファイルごとのサイズ・ハッシュ・対象コミットを記録する `installer-manifest.json` を Actions Artifacts に14日保存します。GitHub へのサインインが必要です。GitHub Releases / ストア / 更新サーバーへの公開は行いません。CI token は `contents: read` のみです。
 
-## 署名・公証が未設定
+## 署名・公証
 
-現在は以下が未設定です。
+Apple Developer ID / notarization と Windows Authenticode の資格情報は未設定です。OS の警告・ブロックが発生し得ます。「安全にすぐインストールできる正式版」とは案内しません。OS の保護を無効にしたり、警告を迂回したりしないでください。
 
-- Apple Developer ID による配布用署名。
-- Apple の notarization と stapling。
-- Windows の Authenticode 署名。
-- 公開 Release と署名済み成果物の配布。
+正式配布には、承認された証明書の安全な管理、署名・公証、対象 OS の実機検証が必要です。秘密鍵・証明書・パスワードをリポジトリへ置かないでください。
 
-`mac.identity: null`、`mac.notarize: false` と CI の `CSC_IDENTITY_AUTO_DISCOVERY: false` は、開発ビルドで署名できたかのように誤認しないための明示設定です。将来の正式配布では、この設定を署名ありの構成に変更し、署名失敗時にビルドを止める設定を導入する必要があります。秘密鍵・証明書・パスワードはリポジトリに置かず、承認された安全な資格情報管理で扱ってください。
+[Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/) · [Windows signing](https://v2.tauri.app/distribute/sign/windows/)
 
-署名なしでは OS が警告やブロックを行うことがあります。公証・署名をまだ終えていないビルドを「すぐ安全にインストールできる正式版」として案内しないでください。
+## 容量比較の読み方
 
-参考: [electron-builder コード署名](https://www.electron.build/v26/docs/features/code-signing/)
+Electron 0.1 と Tauri 0.2 は、同じ形式・CPU のインストーラーの実ファイルサイズで比較します。ZIP に複数の形式・CPUをまとめた総容量同士の比較はしません。Windows の WebView2 や Linux の WebKitGTK がシステムに既にあるかによって、初回インストール時の総ダウンロード量は変わります。
+
+パッケージの縮小は、常駐 RAM / CPU 消費の測定値ではありません。メモリ使用量について数値を案内する場合は、同じ OS・同じ履歴件数・同じ操作条件で別に測定します。
 
 ## 公開前チェックリスト
 
-この一覧は「確認済み」の宣言ではありません。正式配布前に、対象のコミット・ビルド番号・OS ごとの結果を記録します。
+以下は全項目が確認済みという宣言ではありません。
 
-- [ ] ユーザー / リポジトリ管理者から公開 Release の承認を得る。
-- [ ] Windows・Apple Silicon Mac・Intel Mac・Linux の対象環境でインストールと起動を確認。
-- [ ] 普通のアプリでコピーしたテキストが取り込まれる。
-- [ ] 既定キーで右側にカードが開き、変更したキーでも呼び出せる。
-- [ ] 競合するキーの登録失敗がユーザーに表示される。
-- [ ] トレイ / メニューバー、閉じる・再表示、終了、2 回目の起動が正しく動く。
-- [ ] カードの選択はコピーだけを行い、入力先へ勝手に貼り付けない。
-- [ ] 秘密を含まないダミー値で、停止・再開・ロック・サスペンドからの復帰を検証。
-- [ ] 既存クリップボードの初回取り込みをしない。
-- [ ] 初期状態で履歴ファイルを作らず、終了後に履歴が残らない。
-- [ ] 永続保存の警告、有効化・再起動・無効化・個別削除・全削除を確認。
-- [ ] ピンを含む件数 / バイト上限を確認。
-- [ ] 外部通信がないことを、通常操作中のネットワーク観察で確認。
-- [ ] デュアルディスプレイ、高 DPI、画面端、短い画面、キーボード操作を確認。
-- [ ] Linux の X11 とサポート対象の Wayland / portal 組み合わせを分けて確認。
-- [ ] Windows 署名、macOS 署名・公証・stapling を検証。
-- [ ] OS の警告を迂回せず、クリーンなユーザー環境へインストールできる。
-- [ ] アップグレード・アンインストール、ユーザーデータが残る範囲を確認。
-- [ ] 署名済み最終成果物で SHA-256 を再生成し、版番号とリリースノートを確認。
+- [ ] 管理者が公開 Release を承認。
+- [ ] Windows・Apple Silicon Mac・Intel Mac・Linux でインストール・起動・終了を実機確認。
+- [ ] 未設定の WebView2 / WebKitGTK 依存関係とオフライン時の挙動を確認。
+- [ ] コピー検出、ショートカットの変更・競合、トレイ、2回目の起動を確認。
+- [ ] 右端の広い扇、ホバー拡大、短い/縦長画面、高DPI、複数モニターを確認。
+- [ ] コピー成功時のみ閉じ、失敗時にはエラーとカードが残る。
+- [ ] 歯車はコピーせず設定を開く。設定の取消、上限削減の確認を検証。
+- [ ] 停止・再開・ロック・スリープ復帰後の既存値スキップを合成データで検証。
+- [ ] macOS の機密マーカー尊重と、アプリ情報取得失敗時の不明表示を確認。
+- [ ] 任意保存の警告、再起動、保存解除、個別削除、ピンを含む全削除を確認。
+- [ ] Linux X11 とサポートする Wayland 環境を個別に確認。
+- [ ] 外部通信なし、権限の最小化、production バイナリにテストコマンドなしを確認。
+- [ ] 署名・公証とハッシュを検証。警告の回避なしでインストールできる。
+- [ ] 更新・アンインストールとユーザーデータの残り方を確認。
 
-## ローカルでの生成
+## アイコンと画像
 
-[README](../README.md#インストーラーを生成する) のコマンドを対象 OS 上で実行します。Linux のパッケージング依存関係として、CI では `libopenjp2-tools` を導入しています。ビルドツールは Electron バイナリや各プラットフォーム用ツールを追加取得する場合があります。
+`assets/` と `build/` の画像は Pupa 用のオリジナルです。README のスクリーンショットは合成テキストを使用し、撮影したランタイムを明記します。実際のクリップボード本文を Issue や公開画像に載せないでください。
 
-Linux の desktop identity は `jp.kuro0315.pupa.desktop` です。`package.json` の `desktopName` と Electron main の指定に加え、`linux.syncDesktopName: true` によりインストール先の `.desktop` 名を一致させています。アプリ名だけを変更する場合も、この識別子を安易に変えないでください。
-
-参考: [electron-builder Linux のウィンドウ識別](https://www.electron.build/v26/docs/linux/)、[Electron Wayland ショートカット](https://www.electronjs.org/docs/latest/api/global-shortcut)
-
-## アイコン
-
-`assets/icon.svg` は Pupa 専用のオリジナルベクターです。各 OS 用の PNG / ICO / ICNS、macOS の monochrome template tray、インストーラー用画像を同梱しています。Python 3 + Pillow で `python scripts/generate-icons.py` を実行すると再生成できます。通常の CI はコミット済みの画像を使い、Python を必要としません。
+[開発・パッケージ手順](DEVELOPMENT.md) · [インストール](INSTALL.md) · [プライバシー](PRIVACY.md)

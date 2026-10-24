@@ -11,9 +11,9 @@ export function createPreviewBridge(): PupaBridge {
       { id: 'demo-text', source: { name: 'Memo Lab（デモ）', kind: 'foreground' }, kind: 'text', color: 'rose', pinned: false, createdAt: now - 1440000, text: '週末の小さなリスト\n・いつものカフェで、ゆっくり\n・読みかけの本を一章\n・春色の花を一輪' },
       { id: 'demo-thought', kind: 'text', color: 'butter', pinned: false, createdAt: now - 3600000, text: 'つくることは、よく見ること。\n何気ない毎日のなかに、ヒントはたくさん。' },
     ],
-    settings: { shortcut: 'CommandOrControl+Shift+Space', historyLimit: 60, persistence: false, hideAfterCopy: true, sourceApp: true, fanSpread: 42, fanDistance: 0 },
+    settings: { shortcut: 'CommandOrControl+Shift+Space', historyLimit: 60, persistence: false, hideAfterCopy: true, sourceApp: true, fanSpread: 72, fanDistance: 0 },
     paused: false,
-    status: { shortcutRegistered: true, storageWarning: null, platform: /Mac/.test(navigator.platform) ? 'darwin' : 'linux', wayland: false, version: '0.1.0' },
+    status: { shortcutRegistered: true, storageWarning: null, platform: /Mac/.test(navigator.platform) ? 'darwin' : 'linux', wayland: false, version: '0.2.0' },
   };
   const listeners = new Set<(next: State) => void>();
   const emit = () => { state = structuredClone(state); for (const fn of listeners) fn(state); return { ok: true }; };

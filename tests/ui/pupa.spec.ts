@@ -123,7 +123,7 @@ test('card gear never copies; fan controls preview, cancel and persist', async (
   await setRange(page, '#fan-spread', '30'); await setRange(page, '#fan-distance', '24');
   expect(await cards(page).first().getAttribute('style')).not.toBe(before);
   await page.getByRole('button', {name:'キャンセル', exact:true}).click();
-  await openSettings(page); await expect(page.locator('#fan-spread')).toHaveValue('42');
+  await openSettings(page); await expect(page.locator('#fan-spread')).toHaveValue('72');
   await expect(page.locator('#fan-distance')).toHaveValue('0');
   await setRange(page, '#fan-spread', '35'); await setRange(page, '#fan-distance', '18');
   await page.locator('#source-app').uncheck(); await page.locator('#save-settings').click();
@@ -168,4 +168,84 @@ test('copy failure retains visible card and exact text is selected on success', 
   await page.evaluate(()=>(window as any).fail=false); await page.keyboard.press('Enter');
   await expect.poll(()=>page.evaluate(()=>(window as any).hidden)).toBe(1);
   expect(await page.evaluate(()=>(window as any).copied)).toEqual(['exact-entry','exact-entry']);
+});
+
+
+for (const viewport of [
+  { width: 780, height: 900, name: 'native' },
+  { width: 780, height: 1440, name: 'tall' },
+  { width: 780, height: 480, name: 'short' },
+  { width: 2560, height: 1080, name: 'ultrawide' },
+  { width: 390, height: 640, name: 'narrow' },
+]) {
+  test(`wide fan uses work-area height and keeps every card visible: ${viewport.name}`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.setViewportSize(viewport);
+    await page.goto('/'); await expect(cards(page)).toHaveCount(5);
+    const bounds = await page.getByTestId('fan-card').evaluateAll(elements => elements.map(el => {
+      const { left, top, right, bottom } = el.getBoundingClientRect();
+      return { left, top, right, bottom };
+    }));
+    const fanTop = Math.min(...bounds.map(rect => rect.top));
+    const fanBottom = Math.max(...bounds.map(rect => rect.bottom));
+    expect(fanTop).toBeLessThanOrEqual(20);
+    expect(fanBottom).toBeGreaterThanOrEqual(viewport.height - 20);
+    for (const rect of bounds) {
+      expect(rect.left).toBeGreaterThanOrEqual(10);
+      expect(rect.right).toBeLessThanOrEqual(viewport.width - 10);
+      expect(rect.top).toBeGreaterThanOrEqual(10);
+      expect(rect.bottom).toBeLessThanOrEqual(viewport.height - 10);
+    }
+    const angles = await cards(page).evaluateAll(elements => elements.map(el => parseFloat((el as HTMLElement).style.getPropertyValue('--angle'))));
+    expect(Math.max(...angles) - Math.min(...angles)).toBeGreaterThanOrEqual(140);
+    // Focus is the keyboard equivalent of hover, so both paths must use the
+    // same unclipped enlargement at the top and bottom of the fan.
+    for (let index = 0; index < 5; index++) {
+      await page.getByTestId('copy-entry').nth(index).focus();
+      await expect(cards(page).nth(index)).toHaveClass(/is-expanded/);
+      const expanded = await page.getByTestId('fan-card').nth(index).boundingBox();
+      expect(expanded).not.toBeNull();
+      expect(expanded!.x).toBeGreaterThanOrEqual(10);
+      expect(expanded!.y).toBeGreaterThanOrEqual(10);
+      expect(expanded!.x + expanded!.width).toBeLessThanOrEqual(viewport.width - 10);
+      expect(expanded!.y + expanded!.height).toBeLessThanOrEqual(viewport.height - 10);
+      expect(expanded!.width).toBeGreaterThan(await cards(page).nth(index).evaluate(el => (el as HTMLElement).offsetWidth));
+    }
+    await page.locator('.fan-stage').focus();
+    await page.mouse.move(0, 0);
+    await page.getByTestId('copy-entry').last().hover();
+    await expect(cards(page).last()).toHaveClass(/is-expanded/);
+    const hovered = await page.getByTestId('fan-card').last().boundingBox();
+    expect(hovered!.y + hovered!.height).toBeLessThanOrEqual(viewport.height - 10);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight)).toBeTruthy();
+    fs.mkdirSync('artifacts', { recursive: true });
+    await page.locator('.fan-stage').focus(); await page.mouse.move(0, 0);
+    await page.screenshot({ path: `artifacts/pupa-fan-${viewport.name}.png` });
+  });
+}
+
+test('spread slider opens vertical spacing while resize preserves clamped focus', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 780, height: 900 });
+  await page.goto('/'); await openSettings(page);
+  await expect(page.locator('#fan-spread')).toHaveAttribute('max', '84');
+  const span = () => page.getByTestId('fan-card').evaluateAll(elements => {
+    const rects = elements.map(el => el.getBoundingClientRect());
+    return Math.max(...rects.map(r => r.bottom)) - Math.min(...rects.map(r => r.top));
+  });
+  await setRange(page, '#fan-spread', '20'); const closed = await span();
+  await setRange(page, '#fan-spread', '84'); const opened = await span();
+  expect(opened - closed).toBeGreaterThan(160);
+  await setRange(page, '#fan-distance', '90');
+  await page.locator('#save-settings').click();
+  await page.getByTestId('copy-entry').first().focus();
+  for (const viewport of [{ width: 780, height: 480 }, { width: 390, height: 640 }, { width: 780, height: 1440 }]) {
+    await page.setViewportSize(viewport);
+    await expect.poll(async () => page.getByTestId('fan-card').first().evaluate(el => {
+      const r = el.getBoundingClientRect();
+      return r.left >= 10 && r.top >= 10 && r.right <= innerWidth - 10 && r.bottom <= innerHeight - 10;
+    })).toBeTruthy();
+    await expect(cards(page).first()).toHaveClass(/is-expanded/);
+    await expect(page.getByTestId('copy-entry').first()).toBeFocused();
+  }
 });
