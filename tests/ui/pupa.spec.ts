@@ -263,9 +263,11 @@ test('explicit focus replaces hover and stationary resize cannot steal it', asyn
   await page.getByTestId('copy-entry').first().focus();
   await expect(cards(page).first()).toHaveClass(/is-expanded/);
   await expect(cards(page).last()).not.toHaveClass(/is-expanded/);
-  const beforeResize = await cards(page).first().evaluate(el => (el as HTMLElement).style.top);
+  // The first leaf stays top-anchored when card dimensions are capped. The
+  // bottom leaf, not the first leaf, must follow this 40 px height increase.
+  const beforeResize = await cards(page).last().evaluate(el => parseFloat((el as HTMLElement).style.top));
   await page.setViewportSize({ width: 780, height: 940 });
-  await expect.poll(() => cards(page).first().evaluate(el => (el as HTMLElement).style.top)).not.toBe(beforeResize);
+  await expect.poll(() => cards(page).last().evaluate(el => parseFloat((el as HTMLElement).style.top))).toBeCloseTo(beforeResize + 40, 1);
   await expect(page.getByTestId('copy-entry').first()).toBeFocused();
   await expect(cards(page).first()).toHaveClass(/is-expanded/);
   // A real mouse move must still be able to choose a different card.

@@ -28,7 +28,7 @@ npx playwright install chromium
 npm run test:ui
 ```
 
-`npm test` は Rust の純粋コアテストです。実際の OS のクリップボードや、ユーザーのウィンドウ情報は読みません。GUI 依存のないコア検証と、実際の WebView / OS での確認を分けています。
+`npm test` は Rust の純粋コアテストと、限定コマンドの bridge / 状態順序のテストです。実際の OS のクリップボードや、ユーザーのウィンドウ情報は読みません。GUI 依存のないコア検証と、実際の WebView / OS での確認を分けています。
 
 Linux ネイティブ smoke は CI の隔離された Xvfb / D-Bus セッションで Tauri + WebKitWebDriver を使います。テスト専用にコンパイルしたバイナリと合成値だけを使用し、配布物にはテストコマンドを含めません。実 OS クリップボード API の試験も、自分で書いた合成値だけを読みます。普段使いのデスクトップでは実行しないでください。
 

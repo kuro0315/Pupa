@@ -54,7 +54,7 @@ macOS では、他のアプリが付ける concealed / transient のクリップ
 
 ## 保存先と削除
 
-Tauri の `app_data_dir` 配下に `settings.json` と、保存を有効にした場合だけ `history.json` を置きます。書き込みの途中では `.tmp` ファイルを使用します。
+Tauri の `app_data_dir` 配下に `settings.json` と、保存を有効にした場合だけ `history.json` を置きます。書き込みの途中では同じ保存先に専用の一時ファイルを使用し、起動時・履歴削除時には残った履歴用一時ファイルも整理します。
 
 通常の場所は以下です。OS の環境変数・設定・アプリの実行名によって異なる場合があります。
 

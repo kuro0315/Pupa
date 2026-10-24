@@ -118,7 +118,33 @@ async function main() {
     assert.equal((await invoke('smoke_state')).state.entries.length, 3);
     assert.equal((await invoke('clear_history')).ok, true);
     assert.equal((await invoke('smoke_state')).state.entries.length, 0);
-    console.log('PASS: native Tauri startup, Rust commands/events, synthetic clipboard capture, memory-only default, keyboard copy-and-hide, repeated toggle/Escape, pause baseline, pin/delete/clear.');
+
+    // Final visual evidence uses seven synthetic entries in the actual Tauri
+    // window. No app attribution is fabricated and the original 3-card capture
+    // above remains a separate record of the preceding integration assertions.
+    await invoke('smoke_tick'); // Clear resets the baseline; do not recapture its previous synthetic value.
+    assert.equal((await invoke('smoke_state')).state.entries.length, 0);
+    for (const text of [
+      '七枚のクリップボード履歴を、画面いっぱいの扇で。\nこれは検証用のサンプルです。',
+      'https://v2.tauri.app/',
+      "const palette = ['cyan', 'violet', 'lime'];",
+      'IDEA LOG\n速く呼び出す。迷わず選ぶ。必要なときだけ、目の前に。',
+      'https://github.com/kuro0315/Pupa',
+      'function remember(text) {\n  return { text, local: true };\n}',
+      'ローカルで完結する、七つの手札。\n↑ ↓ で選択 / Enter でコピー / Esc で閉じる',
+    ]) await collect(text);
+    assert.equal((await invoke('smoke_state')).state.entries.length, 7);
+    await invoke('smoke_toggle');
+    await waitFor(async () => (await invoke('smoke_state')).visible, 'seven-card native fan reopen');
+    await count(7);
+    await waitFor(() => execute('return document.querySelectorAll(".card-slot.is-expanded").length === 0'), 'resting native fan');
+    await sleep(1300);
+    fs.writeFileSync('artifacts/pupa-tauri-native-fan-linux.png', Buffer.from(await request('GET', `/session/${sessionId}/screenshot`), 'base64'));
+    await key('\uE015');
+    await waitFor(() => execute('return document.querySelectorAll(".card-slot.is-expanded").length === 1'), 'expanded native fan card');
+    await sleep(600);
+    fs.writeFileSync('artifacts/pupa-tauri-native-hover-linux.png', Buffer.from(await request('GET', `/session/${sessionId}/screenshot`), 'base64'));
+    console.log('PASS: native Tauri startup, Rust commands/events, synthetic clipboard capture, memory-only default, keyboard copy-and-hide, repeated toggle/Escape, pause baseline, pin/delete/clear, seven-card resting/expanded native screenshots.');
   } finally {
     if (sessionId) await request('DELETE', `/session/${sessionId}`).catch(error => console.error('WebDriver cleanup:', error.message));
     driver?.kill('SIGTERM');
