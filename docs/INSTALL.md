@@ -45,6 +45,8 @@ Apple Silicon（M シリーズ）は `arm64`、Intel Mac は `x64` を選びま�
 4. DMG を取り出し、Applications から Pupa を起動します。
 5. `⌘ ⇧ Space` でカードが開くことを確認します。
 
+DMG の作成中に CI のディスク取り出しが一時的に失敗し、再試行でも直らない場合は、検証済みの `Pupa-<version>-mac-<arch>.app.zip` を代わりに保存します。ZIP を展開し、同じく Pupa.app を Applications に配置します。成果物の manifest に形式と理由を記録します。
+
 現在の CI は Apple Developer ID による署名も公証も行わないため、Gatekeeper に拒否される可能性があります。隔離属性の削除や Gatekeeper の無効化などの迂回操作は案内しません。正式配布前の署名・公証を実施してください。
 
 Pupa は自動貼り付けをしないため、アクセシビリティ権限を求めません。既定のショートカットが他のアプリと競合する場合は Pupa の設定で変更できます。

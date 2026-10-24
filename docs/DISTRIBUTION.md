@@ -7,13 +7,15 @@ Tauri 2 + Rust のネイティブビルドを OS ごとに行います。`Build 
 | ランナー | 出力 |
 | --- | --- |
 | Windows x64 | NSIS インストーラー |
-| macOS Apple Silicon | arm64 DMG |
-| macOS Intel | x64 DMG |
+| macOS Apple Silicon | arm64 DMG（特定の CI 障害時は .app ZIP） |
+| macOS Intel | x64 DMG（特定の CI 障害時は .app ZIP） |
 | Ubuntu 24.04 x64 | AppImage / deb |
 
 Linux では Chromium の UI テストに加え、別途 Tauri + WebKitGTK のネイティブ smoke を行い、それぞれの実スクリーンショットを保存します。ネイティブ smoke は隔離した Xvfb / D-Bus とテスト専用バイナリを使用し、実ユーザーのクリップボード・前面アプリを読みません。配布バイナリは `smoke-test` feature なしで別にビルドします。
 
 成果物、`SHA256SUMS.txt`、ファイルごとのサイズ・ハッシュ・対象コミットを記録する `installer-manifest.json` を Actions Artifacts に14日保存します。GitHub へのサインインが必要です。GitHub Releases / ストア / 更新サーバーへの公開は行いません。CI token は `contents: read` のみです。
+
+DMG のディスク取り出しが `Resource busy` になった場合だけ、パッケージ生成を最大2回再試行します。続く場合は、既に正常ビルドされた .app の識別子・バージョン・CPU と ZIP の完全性を確認し、.app ZIP を代替成果物とします。コンパイル・署名など別の失敗は隠しません。
 
 ## 署名・公証
 

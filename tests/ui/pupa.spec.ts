@@ -238,7 +238,10 @@ test('spread slider opens vertical spacing while resize preserves clamped focus'
   expect(opened - closed).toBeGreaterThan(160);
   await setRange(page, '#fan-distance', '90');
   await page.locator('#save-settings').click();
+  await expect(page.getByTestId('settings-dialog')).not.toBeVisible();
   await page.getByTestId('copy-entry').first().focus();
+  await expect(cards(page).first()).toHaveClass(/is-expanded/);
+  await expect(page.getByTestId('copy-entry').first()).toBeFocused();
   for (const viewport of [{ width: 780, height: 480 }, { width: 390, height: 640 }, { width: 780, height: 1440 }]) {
     await page.setViewportSize(viewport);
     await expect.poll(async () => page.getByTestId('fan-card').first().evaluate(el => {
@@ -248,4 +251,25 @@ test('spread slider opens vertical spacing while resize preserves clamped focus'
     await expect(cards(page).first()).toHaveClass(/is-expanded/);
     await expect(page.getByTestId('copy-entry').first()).toBeFocused();
   }
+});
+
+
+test('explicit focus replaces hover and stationary resize cannot steal it', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 780, height: 900 });
+  await page.goto('/'); await expect(cards(page)).toHaveCount(5);
+  await page.getByTestId('copy-entry').last().hover();
+  await expect(cards(page).last()).toHaveClass(/is-expanded/);
+  await page.getByTestId('copy-entry').first().focus();
+  await expect(cards(page).first()).toHaveClass(/is-expanded/);
+  await expect(cards(page).last()).not.toHaveClass(/is-expanded/);
+  const beforeResize = await cards(page).first().evaluate(el => (el as HTMLElement).style.top);
+  await page.setViewportSize({ width: 780, height: 940 });
+  await expect.poll(() => cards(page).first().evaluate(el => (el as HTMLElement).style.top)).not.toBe(beforeResize);
+  await expect(page.getByTestId('copy-entry').first()).toBeFocused();
+  await expect(cards(page).first()).toHaveClass(/is-expanded/);
+  // A real mouse move must still be able to choose a different card.
+  await page.mouse.move(0, 0);
+  await page.getByTestId('copy-entry').last().hover();
+  await expect(cards(page).last()).toHaveClass(/is-expanded/);
 });

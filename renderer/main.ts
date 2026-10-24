@@ -49,6 +49,7 @@ let filter = 'all';
 let selectedId: string | null = null;
 let hoverId: string | null = null;
 let keyboardId: string | null = null;
+let lastPointerPosition: { x: number; y: number } | null = null;
 let filteredEntries: ClipboardEntry[] = [];
 let shownEntries: ClipboardEntry[] = [];
 let pageOffset = 0;
@@ -252,9 +253,17 @@ function renderCards() {
     settings.classList.toggle('has-warning', warning); settings.classList.toggle('is-paused', state!.paused);
     bottomTools.append(settings, cardAction(copiedId === entry.id ? 'check' : 'copy', copiedId === entry.id ? 'コピー済み' : 'コピー', 'copy-icon', () => { void copyEntry(entry); }));
     card.append(bottomTools); slot.append(card); deck.append(slot);
-    slot.addEventListener('pointerenter', (event) => { if (event.pointerType === 'touch') return; hoverId = entry.id; selectedId = entry.id; updateExpansion(); });
+    // A rebuilt or resized card can emit pointerenter under a stationary
+    // cursor. Only actual pointer movement may supersede keyboard focus.
+    slot.addEventListener('pointermove', (event) => {
+      if (event.pointerType === 'touch') return;
+      const moved = !lastPointerPosition || event.clientX !== lastPointerPosition.x || event.clientY !== lastPointerPosition.y;
+      lastPointerPosition = { x: event.clientX, y: event.clientY };
+      if (!moved || hoverId === entry.id) return;
+      hoverId = entry.id; selectedId = entry.id; updateExpansion();
+    });
     slot.addEventListener('pointerleave', () => { if (!slot.isConnected) return; if (hoverId === entry.id) { hoverId = null; updateExpansion(); } });
-    slot.addEventListener('focusin', () => { keyboardId = entry.id; selectedId = entry.id; updateExpansion(); });
+    slot.addEventListener('focusin', () => { hoverId = null; keyboardId = entry.id; selectedId = entry.id; updateExpansion(); });
     slot.addEventListener('focusout', (event) => { if (!slot.isConnected) return; if (!slot.contains(event.relatedTarget as Node | null) && keyboardId === entry.id) { keyboardId = null; updateExpansion(); } });
   });
   // Removing a focused/hovered DOM node may emit leave/out events, and an
@@ -337,7 +346,14 @@ $('#clear-history-button').addEventListener('click', () => { if (!state) return;
 $('#confirm-clear').addEventListener('click', async () => { const button = $<HTMLButtonElement>('#confirm-clear'); button.disabled = true; if (await mutate(() => bridge.clearHistory(), '履歴を削除しました')) closeDialog(clearDialog); button.disabled = false; });
 document.querySelectorAll<HTMLButtonElement>('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => closeDialog($<HTMLDialogElement>(`#${button.dataset.closeDialog}`))));
 [settingsDialog, clearDialog].forEach((dialog) => {
-  dialog.addEventListener('close', () => { stopRecording(); if (dialog === settingsDialog) { draftFan = null; renderCards(); } (lastFocus?.isConnected && !lastFocus.closest('dialog') ? lastFocus : stage).focus({ preventScroll: true }); });
+  dialog.addEventListener('close', () => {
+    // close is queued by the browser. Do not steal a focus choice made after
+    // dismissal but before this event (including assistive/keyboard focus).
+    const active = document.activeElement;
+    const restoreFocus = active === document.body || active === stage || active === dialog || dialog.contains(active);
+    stopRecording(); if (dialog === settingsDialog) { draftFan = null; renderCards(); }
+    if (restoreFocus) (lastFocus?.isConnected && !lastFocus.closest('dialog') ? lastFocus : stage).focus({ preventScroll: true });
+  });
   dialog.addEventListener('click', (event) => { if (event.target !== dialog) return; const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeDialog(dialog); });
 });
 $('#record-shortcut').addEventListener('click', () => { if (recording) { stopRecording(); return; } recording = true; $('#record-shortcut').textContent = '記録をやめる'; $('#record-shortcut').classList.add('recording'); $('#shortcut-help').textContent = 'Ctrl / ⌘ / Alt と一緒に、使いたいキーを押してください。Escで中止。'; });

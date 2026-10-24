@@ -66,6 +66,7 @@ jobs:
         with:
           workspaces: src-tauri
           key: ${{ matrix.target }}
+          cache-on-failure: true
       - name: Install Linux build and isolated-desktop dependencies
         if: runner.os == 'Linux'
         run: |
@@ -83,6 +84,8 @@ jobs:
         if: runner.os == 'Linux'
         run: npx playwright install --with-deps chromium
       - name: Verify browser UI and capture screenshots/video
+        id: browser-ui
+        continue-on-error: true
         if: runner.os == 'Linux'
         run: npm run test:ui
       - name: Install native WebDriver bridge
@@ -106,8 +109,17 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
           compression-level: 0
+      # A UI failure must still fail the job, but first collect independent native
+      # diagnostics so one failing browser assertion does not hide native issues.
+      - name: Require passing browser UI checks
+        if: runner.os == 'Linux' && steps.browser-ui.outcome != 'success'
+        run: exit 1
       - name: Package production desktop apps (no smoke feature, no signing credentials)
+        if: runner.os != 'macOS'
         run: npm run dist -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --ci -- --locked
+      - name: Package macOS DMG with bounded busy-detach retry
+        if: runner.os == 'macOS'
+        run: bash scripts/package-macos.sh ${{ matrix.target }}
       - name: Collect installers, sizes, and SHA-256 checksums
         run: node scripts/checksums.cjs src-tauri/target/${{ matrix.target }}/release/bundle release
       - name: Upload development installers
@@ -120,6 +132,7 @@ jobs:
           path: |
             release/*.exe
             release/*.dmg
+            release/*.app.zip
             release/*.AppImage
             release/*.deb
             release/SHA256SUMS.txt

@@ -13,6 +13,7 @@ function installerName(file) {
   const suffix = {
     '.exe': 'windows-x64-setup.exe',
     '.dmg': `mac-${arm64 ? 'arm64' : 'x64'}.dmg`,
+    '.zip': `mac-${arm64 ? 'arm64' : 'x64'}.app.zip`,
     '.AppImage': `linux-${arm64 ? 'aarch64' : 'x86_64'}.AppImage`,
     '.deb': `linux-${arm64 ? 'arm64' : 'amd64'}.deb`,
   }[extension];
@@ -24,15 +25,17 @@ async function walk(directory) {
   const files = [];
   for (const item of await readdir(directory, { withFileTypes: true })) {
     const target = join(directory, item.name);
-    if (item.isDirectory()) files.push(...await walk(target));
-    else if (/\.(exe|dmg|AppImage|deb)$/.test(item.name)) files.push(target);
+    if (item.isDirectory() && item.name !== 'macos' && !item.name.endsWith('.app')) files.push(...await walk(target));
+    else if (/\.(exe|dmg|AppImage|deb|zip)$/.test(item.name)) files.push(target);
   }
   return files;
 }
 async function main() {
   const input = resolve(process.argv[2] || 'release');
   const output = resolve(process.argv[3] || 'release');
-  const files = (await walk(input)).sort();
+  let files = (await walk(input)).sort();
+  // A successful fresh DMG supersedes a cached ZIP fallback from an older run.
+  if (files.some(file => file.endsWith('.dmg'))) files = files.filter(file => !file.endsWith('.app.zip'));
   if (!files.length) throw new Error(`No installers found in ${input}`);
   await mkdir(output, { recursive: true });
   const manifest = { commit: process.env.GITHUB_SHA || null, version, target: process.env.PUPA_BUILD_TARGET || null, platform: process.platform, arch: process.arch, files: [] };
@@ -43,7 +46,7 @@ async function main() {
     if (file !== destination) await copyFile(file, destination);
     const hash = createHash('sha256');
     for await (const chunk of createReadStream(destination)) hash.update(chunk);
-    const entry = { name, originalName: basename(file), bytes: (await stat(destination)).size, sha256: hash.digest('hex') };
+    const entry = { name, ...(name.endsWith('.app.zip') ? { format: 'app-zip', fallbackReason: 'DMG hdiutil Resource busy after two retries' } : {}), originalName: basename(file), bytes: (await stat(destination)).size, sha256: hash.digest('hex') };
     manifest.files.push(entry);
     console.log(`${entry.name}\t${entry.bytes} bytes\tSHA256 ${entry.sha256}`);
   }
