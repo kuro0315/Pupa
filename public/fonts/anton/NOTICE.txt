@@ -1,0 +1,19 @@
+Anton Regular, version 2.116
+Copyright 2020 The Anton Project Authors
+https://github.com/googlefonts/AntonFont
+Designed by Vernon Adams.
+
+License: SIL Open Font License, Version 1.1. See the accompanying OFL.txt.
+The Pupa application license does not replace the font's OFL license.
+
+This is the complete, unmodified upstream font. Pupa uses it for card indices
+only. It is bundled with the app and never fetched from a runtime font service.
+
+Retrieved from the official Google Fonts repository:
+https://github.com/google/fonts/tree/main/ofl/anton
+
+Verified identical to this pinned upstream version:
+https://github.com/googlefonts/AntonFont/blob/beb92fcad87808357123bb66881b4032dc96efe7/fonts/Anton-Regular.ttf
+
+Font Git blob: 4d65707db9d8663ccfa99cd28cd3a4e0025be178
+Font SHA-256: a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab

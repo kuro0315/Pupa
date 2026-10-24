@@ -1,0 +1,183 @@
+name: Build Tauri desktop apps
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Development artifacts only. No release creation, upload, signing credentials,
+# publishing token, or write permission is used by any job.
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            platform: windows-x64
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - name: macOS Apple Silicon
+            os: macos-15
+            platform: macos-arm64
+            target: aarch64-apple-darwin
+            bundles: dmg
+          - name: macOS Intel
+            os: macos-15-intel
+            platform: macos-x64
+            target: x86_64-apple-darwin
+            bundles: dmg
+          - name: Linux x64
+            os: ubuntu-24.04
+            platform: linux-x64
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+    env:
+      CARGO_TERM_COLOR: always
+      PUPA_BUILD_TARGET: ${{ matrix.target }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Set up stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+          cache-on-failure: true
+      - name: Install Linux build and isolated-desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb webkit2gtk-driver dbus-x11 x11-utils ffmpeg
+      - name: Install locked npm dependencies
+        run: npm ci
+      - name: Run Rust core and frontend bridge tests
+        run: npm test
+      - name: Check locked desktop Rust build
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
+      - name: Build renderer
+        run: npm run build
+      - name: Install UI test browser
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+      - name: Verify browser UI and capture screenshots/video
+        id: browser-ui
+        continue-on-error: true
+        if: runner.os == 'Linux'
+        run: npm run test:ui
+      - name: Install native WebDriver bridge
+        if: runner.os == 'Linux'
+        run: cargo install tauri-driver --locked
+      - name: Build synthetic-only native smoke binary
+        if: runner.os == 'Linux'
+        run: npm run tauri -- build --debug --no-bundle --features smoke-test --target ${{ matrix.target }} -- --locked
+      - name: Smoke-test Tauri on a standard physical X11 desktop
+        id: native-standard
+        continue-on-error: true
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          PUPA_ISOLATED_DESKTOP: '1'
+          GDK_SCALE: '1'
+          PUPA_DESKTOP_SCENARIO: standard
+          PUPA_SCREEN_WIDTH: '1440'
+          PUPA_SCREEN_HEIGHT: '1000'
+        # Exercise Pupa's default X11 preference rather than selecting it here.
+        run: env -u GDK_BACKEND xvfb-run -a -s '-screen 0 1440x1000x24 -dpi 96' dbus-run-session -- npm run test:native -- src-tauri/target/${{ matrix.target }}/debug/pupa
+      - name: Verify actual right-edge placement on an ultrawide desktop
+        id: native-ultrawide
+        continue-on-error: true
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          PUPA_ISOLATED_DESKTOP: '1'
+          PUPA_SMOKE_POSITION_ONLY: '1'
+          PUPA_ARTIFACT_DIR: artifacts/native-ultrawide
+          PUPA_DESKTOP_SCENARIO: ultrawide
+          PUPA_SCREEN_WIDTH: '3440'
+          PUPA_SCREEN_HEIGHT: '1440'
+          TAURI_DRIVER_PORT: '4454'
+          GDK_BACKEND: x11
+          GDK_SCALE: '1'
+        run: xvfb-run -a -s '-screen 0 3440x1440x24 -dpi 96' dbus-run-session -- npm run test:native -- src-tauri/target/${{ matrix.target }}/debug/pupa
+      - name: Verify actual right-edge placement with GTK 2x HiDPI scaling
+        id: native-hidpi
+        continue-on-error: true
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          PUPA_ISOLATED_DESKTOP: '1'
+          PUPA_SMOKE_POSITION_ONLY: '1'
+          PUPA_ARTIFACT_DIR: artifacts/native-hidpi
+          PUPA_DESKTOP_SCENARIO: hidpi-2x
+          PUPA_SCREEN_WIDTH: '2880'
+          PUPA_SCREEN_HEIGHT: '1800'
+          TAURI_DRIVER_PORT: '4464'
+          GDK_BACKEND: x11
+          GDK_SCALE: '2'
+        run: xvfb-run -a -s '-screen 0 2880x1800x24 -dpi 96' dbus-run-session -- npm run test:native -- src-tauri/target/${{ matrix.target }}/debug/pupa
+      - name: Upload UI and native Tauri evidence
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: Pupa-ui-${{ github.run_number }}
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 0
+      # A UI failure must still fail the job, but first collect independent native
+      # diagnostics so one failing browser assertion does not hide native issues.
+      - name: Require passing browser UI checks
+        if: runner.os == 'Linux' && steps.browser-ui.outcome != 'success'
+        run: exit 1
+      # Keep failed native geometry checks fatal after collecting independent
+      # standard, ultrawide, and 2x evidence. Xvfb is not a multi-monitor claim.
+      - name: Require passing native desktop checks
+        if: runner.os == 'Linux' && (steps.native-standard.outcome != 'success' || steps.native-ultrawide.outcome != 'success' || steps.native-hidpi.outcome != 'success')
+        run: exit 1
+      - name: Package production desktop apps (no smoke feature, no signing credentials)
+        if: runner.os != 'macOS'
+        run: npm run dist -- --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --ci -- --locked
+      - name: Package macOS DMG with bounded busy-detach retry
+        if: runner.os == 'macOS'
+        run: bash scripts/package-macos.sh ${{ matrix.target }}
+      - name: Collect installers, sizes, and SHA-256 checksums
+        run: node scripts/checksums.cjs src-tauri/target/${{ matrix.target }}/release/bundle release
+      - name: Upload development installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: Pupa-${{ matrix.platform }}-${{ github.run_number }}
+          retention-days: 14
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.app.zip
+            release/*.AppImage
+            release/*.deb
+            release/SHA256SUMS.txt
+            release/installer-manifest.json

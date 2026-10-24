@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="240" viewBox="0 0 1200 240" role="img" aria-labelledby="title desc">
+<title id="title">PUPA</title><desc id="desc">A yellow and cyan angular Pupa wordmark on charcoal.</desc>
+<rect width="1200" height="240" rx="8" fill="#101119"/>
+<path d="M42 37h116l-10 10H42zm1000 156h116v10h-126z" fill="#eff521"/>
+<path d="M42 195h260m610-150h246" stroke="#58e4ed" stroke-width="2"/>
+<g transform="translate(365 52) skewX(-8)" fill="#eff521">
+<path d="M0 0h83l17 17v48L83 82H28v54H0zm28 25v32h44V25z"/>
+<path d="M120 0h28v110h44V0h28v119l-17 17h-66l-17-17z"/>
+<path d="M240 0h83l17 17v48l-17 17h-55v54h-28zm28 25v32h44V25z"/>
+<path fill-rule="evenodd" d="M380 0h60l31 136h-29l-6-28h-52l-6 28h-29zm30 25-20 59h40z"/>
+</g>
+<path d="m910 88 25 6-8 35-25-6z" fill="none" stroke="#58e4ed" stroke-width="2"/>
+<path d="m916 84 26 13-18 34-23-12" fill="none" stroke="#eff521" stroke-width="2"/>
+<text x="600" y="216" text-anchor="middle" fill="#829798" font-family="monospace" font-size="12" letter-spacing="4">YOUR CLIPBOARD. UNFOLDED.</text>
+</svg>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Pupa butterfly">
+<rect x="68" y="68" width="888" height="888" rx="208" fill="#F9F6EE" stroke="#E4E6DA" stroke-width="5"/>
+<path d="M 512 482 C 435 330 294 226 225 327 C 145 446 306 574 473 564 Z " fill="#C3B4E9"/>
+<path d="M 512 482 C 589 330 730 226 799 327 C 879 446 718 574 551 564 Z " fill="#B9D8C4"/>
+<path d="M 486 536 C 398 529 299 580 324 673 C 349 765 469 728 511 609 Z " fill="#D7E8DB"/>
+<path d="M 538 536 C 626 529 725 580 700 673 C 675 765 555 728 513 609 Z " fill="#DDD0EF"/>
+<rect x="482" y="400" width="60" height="252" rx="30" fill="#486354"/>
+<path d="M501 426 C491 379 471 362 455 363 M523 426 C533 379 553 362 569 363" fill="none" stroke="#486354" stroke-width="13" stroke-linecap="round"/>
+<path d="M489 503 Q513 530 537 503 M489 556 Q513 583 537 556" fill="none" stroke="#D8E9DC" stroke-width="5"/>
+<path d="M729 223 736 240 753 247 736 254 729 271 722 254 705 247 722 240Z M266 690 271 704 285 709 271 714 266 728 261 714 247 709 261 704Z" fill="#B99E65"/>
+</svg>

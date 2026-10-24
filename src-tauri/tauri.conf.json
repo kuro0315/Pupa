@@ -1,0 +1,92 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Pupa",
+  "version": "0.2.2",
+  "identifier": "jp.kuro0315.pupa",
+  "mainBinaryName": "pupa",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Pupa",
+        "width": 780,
+        "height": 900,
+        "visible": false,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "backgroundColor": "#00000000",
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "dragDropEnabled": false,
+        "zoomHotkeysEnabled": false,
+        "create": false
+      }
+    ],
+    "security": {
+      "capabilities": [
+        "main"
+      ],
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'",
+      "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:5173; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Utility",
+    "shortDescription": "Local-first clipboard card fan",
+    "longDescription": "A local-first text clipboard manager with a card-fan interface.",
+    "copyright": "Copyright © 2026 kuro0315",
+    "icon": [
+      "../assets/icon.png",
+      "../assets/icon.ico",
+      "../assets/icon.icns"
+    ],
+    "createUpdaterArtifacts": false,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "installerIcon": "../assets/icon.ico",
+        "headerImage": "../build/installerHeader.bmp",
+        "sidebarImage": "../build/installerSidebar.bmp"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "dmg": {
+        "background": "../build/background.png",
+        "windowSize": {
+          "width": 540,
+          "height": 380
+        },
+        "appPosition": {
+          "x": 130,
+          "y": 220
+        },
+        "applicationFolderPosition": {
+          "x": 410,
+          "y": 220
+        }
+      }
+    },
+    "linux": {
+      "deb": {
+        "section": "utils"
+      }
+    },
+    "resources": {
+      "../public/fonts/anton/OFL.txt": "licenses/Anton-OFL.txt",
+      "../public/fonts/anton/NOTICE.txt": "licenses/Anton-NOTICE.txt"
+    }
+  }
+}
