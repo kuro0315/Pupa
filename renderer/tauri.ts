@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { PupaBridge, Result, State } from './types';
+import type { CopyResult, PupaBridge, Result, State } from './types';
 
 export const isTauriRuntime = () => isTauri();
 
@@ -25,7 +25,8 @@ export function createTauriBridge(): PupaBridge {
   };
   return Object.freeze({
     getState: async () => { await Promise.all(subscriptions); return invoke<State>('get_state'); },
-    copyEntry: (id: string) => invoke<Result>('copy_entry', { id }),
+    copyEntry: (id: string) => invoke<CopyResult>('copy_entry', { id }),
+    completeCopyDismissal: (token: string) => invoke<Result>('complete_copy_dismissal', { token }),
     deleteEntry: (id: string) => invoke<Result>('delete_entry', { id }),
     togglePin: (id: string) => invoke<Result>('toggle_pin', { id }),
     clearHistory: () => invoke<Result>('clear_history'),

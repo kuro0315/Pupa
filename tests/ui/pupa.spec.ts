@@ -159,7 +159,7 @@ test('copy failure retains visible card and exact text is selected on success', 
   await page.addInitScript(() => {
     const state = {entries:[{id:'exact-entry',text:'  Exact\ntext\t🌙  ',kind:'text',color:'mint',createdAt:Date.now(),pinned:false}],settings:{shortcut:'CommandOrControl+Shift+Space',historyLimit:60,persistence:false},paused:false,status:{shortcutRegistered:true,storageWarning:null,platform:'linux',wayland:false,version:'test'}};
     (window as any).hidden=0;(window as any).copied=[];(window as any).fail=true;
-    (window as any).pupa = {getState:async()=>state,onState:()=>()=>{},onShown:()=>()=>{},hide:()=>{(window as any).hidden++;},quit:()=>{},copyEntry:async(id:string)=>{(window as any).copied.push(id);return (window as any).fail?{ok:false,error:'Synthetic copy error'}:{ok:true};}};
+    (window as any).pupa = {getState:async()=>state,onState:()=>()=>{},onShown:()=>()=>{},hide:()=>{(window as any).hidden++;},quit:()=>{},copyEntry:async(id:string)=>{(window as any).copied.push(id);return (window as any).fail?{ok:false,error:'Synthetic copy error'}:{ok:true,dismissToken:'exact-copy-token'};},completeCopyDismissal:async(token:string)=>{if(token==='exact-copy-token')(window as any).hidden++;return{ok:true};}};
   });
   await page.goto('/'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
   await expect(page.locator('#toast')).toContainText('Synthetic copy error');
@@ -297,7 +297,7 @@ const installHandFixture = async (page: import('@playwright/test').Page, count =
     const colors = ['butter', 'mint', 'lavender', 'rose'];
     const state = { entries: Array.from({ length: count }, (_, index) => ({ id: `hand-${index + 1}`, text: `HAND ${String(index + 1).padStart(2, '0')}\nカーソルで手札を選ぶ。\nクリックでコピー。`, kind: 'text', color: colors[index % colors.length], createdAt: Date.now() - index * 60000, pinned: false, source: { kind: 'foreground', name: 'Hand demo' } })), settings: { shortcut: 'CommandOrControl+Shift+Space', historyLimit: 100, persistence: false, sourceApp: true, fanSpread: 72, fanDistance: 0 }, paused: false, status: { shortcutRegistered: true, storageWarning: null, platform: 'linux', wayland: false, version: 'interaction-test' } };
     (window as any).handCopies = []; (window as any).handHidden = 0;
-    (window as any).pupa = { getState: async () => state, onState: () => () => {}, onShown: () => () => {}, hide: () => { (window as any).handHidden++; }, quit: () => {}, copyEntry: async (id: string) => { (window as any).handCopies.push(id); return { ok: true }; } };
+    (window as any).pupa = { getState: async () => state, onState: () => () => {}, onShown: () => () => {}, hide: () => { (window as any).handHidden++; }, quit: () => {}, copyEntry: async (id: string) => { (window as any).handCopies.push(id); return { ok: true, dismissToken: `hand-copy-${(window as any).handCopies.length}` }; }, completeCopyDismissal: async () => { (window as any).handHidden++; return { ok: true }; } };
   }, count);
 };
 
@@ -442,4 +442,113 @@ test('short-screen resting regions support a stable five-card sweep', async ({ p
   expect(await page.evaluate(() => (window as any).handCopies)).toEqual([]);
   expect(await page.evaluate(() => (window as any).handHidden)).toBe(0);
   await page.mouse.move(2, 2); await expect(page.locator('.card-slot.is-expanded')).toHaveCount(0);
+});
+
+
+const installDismissalFixture = async (page: import('@playwright/test').Page) => {
+  await page.addInitScript(() => {
+    const control: any = { copies: [], completions: [], hides: 0, fail: false, tokenless: false, defer: false, successAt: 0, completeAt: 0 };
+    (window as any).dismissal = control;
+    const state = { entries: [{ id: 'dismiss-card', text: 'Exact dismissal test\nNo automatic copying', kind: 'text', color: 'mint', createdAt: Date.now(), pinned: false }], settings: { shortcut: 'CommandOrControl+Shift+Space', historyLimit: 60, persistence: false, hideAfterCopy: true, fanSpread: 72, fanDistance: 0 }, paused: false, status: { shortcutRegistered: true, storageWarning: null, platform: 'linux', wayland: false, version: 'dismissal-test' } };
+    (window as any).pupa = {
+      getState: async () => state, onState: () => () => {}, onShown: (fn: () => void) => { control.show = fn; return () => {}; }, onSettings: (fn: () => void) => { control.settings = fn; return () => {}; }, hide: () => { control.hides++; }, quit: () => {},
+      copyEntry: async (id: string) => {
+        control.copies.push(id); const token = `dismiss-${control.copies.length}`;
+        if (control.defer) { control.defer = false; return new Promise(resolve => { control.resolve = () => { control.successAt = performance.now(); resolve({ ok: true, dismissToken: token }); }; }); }
+        if (control.fail) return { ok: false, error: 'Synthetic write failure' };
+        control.successAt = performance.now(); return control.tokenless ? { ok: true } : { ok: true, dismissToken: token };
+      },
+      completeCopyDismissal: async (token: string) => { control.completions.push(token); control.completeAt = performance.now(); return { ok: true }; },
+    };
+  });
+};
+
+test('copy feedback waits for successful write, rejects repeats, and completes only its token', async ({ page }) => {
+  await installDismissalFixture(page); await page.goto('/'); await expect(cards(page)).toHaveCount(1);
+  await page.evaluate(() => { (window as any).dismissal.defer = true; });
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter'); await page.keyboard.press('Enter');
+  expect(await page.evaluate(() => (window as any).dismissal.copies)).toEqual(['dismiss-card']);
+  await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
+  await page.evaluate(() => (window as any).dismissal.resolve());
+  await expect(page.locator('.fan-stage')).toHaveClass(/is-copy-dismiss/);
+  await expect(page.locator('.is-copy-confirmed')).toHaveCount(1);
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).dismissal.completions)).toEqual(['dismiss-1']);
+  expect(await page.evaluate(() => (window as any).dismissal.copies)).toEqual(['dismiss-card']);
+  expect(await page.evaluate(() => (window as any).dismissal.hides)).toBe(0);
+  await expect(page.locator('.fan-stage')).toHaveClass(/is-copy-dismissed/);
+});
+
+test('failed and token-less copies never animate or issue a hide', async ({ page }) => {
+  await installDismissalFixture(page); await page.goto('/'); await expect(cards(page)).toHaveCount(1);
+  await page.evaluate(() => { (window as any).dismissal.fail = true; });
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await expect(page.locator('#toast')).toContainText('Synthetic write failure');
+  await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
+  await expect(page.getByTestId('fan-card')).toBeVisible();
+  await page.evaluate(() => { (window as any).dismissal.fail = false; (window as any).dismissal.tokenless = true; });
+  await page.keyboard.press('Enter'); await page.waitForTimeout(350);
+  await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
+  expect(await page.evaluate(() => (window as any).dismissal.completions)).toEqual([]);
+  expect(await page.evaluate(() => (window as any).dismissal.hides)).toBe(0);
+});
+
+test('Escape cancels copy animation immediately and reopening cancels its old timer', async ({ page }) => {
+  await installDismissalFixture(page); await page.goto('/'); await expect(cards(page)).toHaveCount(1);
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await expect(page.locator('.fan-stage')).toHaveClass(/is-copy-dismiss/);
+  await page.keyboard.press('Escape');
+  expect(await page.evaluate(() => (window as any).dismissal.hides)).toBe(1);
+  await page.evaluate(() => (window as any).dismissal.show());
+  await page.waitForTimeout(350);
+  await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
+  expect(await page.evaluate(() => (window as any).dismissal.completions)).toEqual([]);
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await expect(page.locator('.fan-stage')).toHaveClass(/is-copy-dismiss/);
+  await page.evaluate(() => (window as any).dismissal.show());
+  await page.waitForTimeout(350);
+  await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
+  expect(await page.evaluate(() => (window as any).dismissal.completions)).toEqual([]);
+});
+
+test('late old write cannot animate a reopened window or unlock a newer copy', async ({ page }) => {
+  await installDismissalFixture(page); await page.goto('/'); await expect(cards(page)).toHaveCount(1);
+  await page.evaluate(() => { (window as any).dismissal.defer = true; });
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await page.evaluate(() => (window as any).dismissal.show());
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await expect(page.locator('.fan-stage')).toHaveClass(/is-copy-dismiss/);
+  await page.evaluate(() => (window as any).dismissal.resolve());
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).dismissal.completions)).toEqual(['dismiss-2']);
+  expect(await page.evaluate(() => (window as any).dismissal.copies)).toEqual(['dismiss-card', 'dismiss-card']);
+  expect(await page.evaluate(() => (window as any).dismissal.hides)).toBe(0);
+});
+
+test('reduced motion completes copy dismissal without moving or flashing the hand', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' }); await installDismissalFixture(page); await page.goto('/'); await expect(cards(page)).toHaveCount(1);
+  await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).dismissal.completions)).toEqual(['dismiss-1']);
+  expect(await page.evaluate(() => (window as any).dismissal.completeAt - (window as any).dismissal.successAt)).toBeLessThan(200);
+  expect(await page.locator('.fan-viewport').evaluate(el => getComputedStyle(el).animationName)).toBe('none');
+  expect(await page.getByTestId('fan-card').evaluate(el => getComputedStyle(el).animationName)).toBe('none');
+});
+
+test('record actual pointer copy, rightward dismissal, and preview reopening', async ({ browser }) => {
+  fs.mkdirSync('artifacts', { recursive: true });
+  const context = await browser.newContext({ viewport: { width: 780, height: 900 }, recordVideo: { dir: 'artifacts', size: { width: 780, height: 900 } } });
+  const page = await context.newPage(); await page.goto('http://127.0.0.1:5173/'); await expect(cards(page)).toHaveCount(5);
+  await page.evaluate(() => document.fonts.ready); await page.waitForTimeout(1100);
+  await page.evaluate(() => {
+    const cursor = document.createElement('div'); cursor.setAttribute('aria-hidden', 'true'); cursor.style.cssText = 'position:fixed;left:0;top:0;width:14px;height:14px;border:2px solid #fff;background:#46e7ee99;border-radius:50%;z-index:9999;pointer-events:none;transform:translate(-50%,-50%);box-shadow:0 0 0 3px #10182088';
+    document.body.append(cursor); document.addEventListener('pointermove', event => { cursor.style.left = `${event.clientX}px`; cursor.style.top = `${event.clientY}px`; }, true);
+  });
+  const points = await restingHandPoints(page);
+  for (const point of points.slice(0, 3)) { await page.mouse.move(point.x, point.y, { steps: 12 }); await expect(page.locator('.card-slot.is-expanded')).toHaveAttribute('data-id', point.id); await page.waitForTimeout(350); }
+  await page.mouse.click(points[2].x, points[2].y);
+  await expect(page.locator('.fan-stage')).toHaveClass(/is-copy-dismiss/);
+  await expect(page.locator('#preview-launcher')).toBeVisible(); await page.waitForTimeout(600);
+  await page.locator('#preview-launcher').click(); await expect(cards(page)).toHaveCount(5); await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
+  await page.waitForTimeout(1000);
+  const video = page.video(); await context.close(); await video?.saveAs('artifacts/pupa-copy-dismissal.webm');
 });

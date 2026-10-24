@@ -24,13 +24,14 @@ test('bridge maps only narrow domain commands and named arguments', async () => 
   const bridge = createTauriBridge();
   assert.ok(Object.isFrozen(bridge));
   assert.deepEqual(await bridge.getState(), state);
-  await bridge.copyEntry('copy'); await bridge.deleteEntry('delete'); await bridge.togglePin('pin');
+  await bridge.copyEntry('copy'); await bridge.completeCopyDismissal('dismiss-token'); await bridge.deleteEntry('delete'); await bridge.togglePin('pin');
   await bridge.clearHistory(); await bridge.setPaused(true);
   await bridge.updateSettings({ persistence: true, confirmHistoryReduction: true });
   bridge.hide(); bridge.quit();
   assert.deepEqual(calls, [
     { command: 'get_state', args: {} },
     { command: 'copy_entry', args: { id: 'copy' } },
+    { command: 'complete_copy_dismissal', args: { token: 'dismiss-token' } },
     { command: 'delete_entry', args: { id: 'delete' } },
     { command: 'toggle_pin', args: { id: 'pin' } },
     { command: 'clear_history', args: {} },
@@ -81,4 +82,32 @@ test('subscription failure fails initial state instead of silently dropping upda
   const bridge = createTauriBridge();
   bridge.onState(() => {});
   await assert.rejects(bridge.getState(), /capability denied/);
+});
+
+
+test('copy dismissal tokens are preserved and completion is explicit', async () => {
+  const calls = [];
+  mockIPC((command, args) => {
+    calls.push({ command, args });
+    return command === 'copy_entry' ? { ok: true, dismissToken: 'opaque-native-token:42' } : { ok: true };
+  });
+  const bridge = createTauriBridge();
+  const copied = await bridge.copyEntry('entry');
+  assert.deepEqual(copied, { ok: true, dismissToken: 'opaque-native-token:42' });
+  assert.deepEqual(calls, [{ command: 'copy_entry', args: { id: 'entry' } }], 'copy does not complete or hide through a transport side effect');
+  assert.deepEqual(await bridge.completeCopyDismissal(copied.dismissToken), { ok: true });
+  assert.deepEqual(calls.at(-1), { command: 'complete_copy_dismissal', args: { token: 'opaque-native-token:42' } });
+});
+
+test('failed and stale no-token copy results remain unchanged without implicit dismissal', async () => {
+  const calls = [];
+  const results = [{ ok: false, error: 'synthetic copy failure' }, { ok: true }];
+  mockIPC((command, args) => { calls.push({ command, args }); return results.shift(); });
+  const bridge = createTauriBridge();
+  assert.deepEqual(await bridge.copyEntry('failed'), { ok: false, error: 'synthetic copy failure' });
+  assert.deepEqual(await bridge.copyEntry('stale'), { ok: true });
+  assert.deepEqual(calls, [
+    { command: 'copy_entry', args: { id: 'failed' } },
+    { command: 'copy_entry', args: { id: 'stale' } },
+  ]);
 });

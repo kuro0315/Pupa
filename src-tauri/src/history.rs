@@ -400,6 +400,67 @@ impl CaptureLifecycle {
     }
 }
 
+/// A copy can dismiss only the same window presentation that initiated it, and
+/// only after the native clipboard write has succeeded. The renderer receives
+/// no token before success. Consuming a token is shared by animation completion
+/// and the safety fallback, making their ordering immaterial.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopyAttempt {
+    token: String,
+    window_generation: u64,
+}
+#[derive(Default, Debug)]
+pub struct CopyDismissal {
+    window_generation: u64,
+    writing: Option<CopyAttempt>,
+    pending: Option<CopyAttempt>,
+}
+impl CopyDismissal {
+    /// Show, hide, Escape, lock and quit cancel dismissal, not an in-flight write.
+    /// Keeping `writing` blocks a second OS write until the first one finishes.
+    pub fn invalidate(&mut self) {
+        self.window_generation = self.window_generation.wrapping_add(1);
+        self.pending = None;
+    }
+    pub fn begin_write(&mut self) -> Option<CopyAttempt> {
+        if self.writing.is_some() || self.pending.is_some() {
+            return None;
+        }
+        let attempt = CopyAttempt {
+            token: Uuid::new_v4().to_string(),
+            window_generation: self.window_generation,
+        };
+        self.writing = Some(attempt.clone());
+        Some(attempt)
+    }
+    pub fn finish_write(
+        &mut self,
+        attempt: CopyAttempt,
+        copied: bool,
+        visible: bool,
+    ) -> Option<String> {
+        if self.writing.as_ref() != Some(&attempt) {
+            return None;
+        }
+        self.writing = None;
+        if !copied || !visible || attempt.window_generation != self.window_generation {
+            return None;
+        }
+        let token = attempt.token.clone();
+        self.pending = Some(attempt);
+        Some(token)
+    }
+    pub fn consume(&mut self, token: &str) -> bool {
+        let matches = self.pending.as_ref().is_some_and(|pending| {
+            pending.token == token && pending.window_generation == self.window_generation
+        });
+        if matches {
+            self.pending = None;
+        }
+        matches
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,6 +475,88 @@ mod tests {
             kind: "foreground".into(),
             icon: None,
         }
+    }
+    #[test]
+    fn copy_dismissal_issues_token_only_after_a_successful_write() {
+        let mut dismissal = CopyDismissal::default();
+        let attempt = dismissal.begin_write().unwrap();
+        assert!(
+            !dismissal.consume(&attempt.token),
+            "a started write cannot dismiss"
+        );
+        assert!(dismissal.finish_write(attempt, false, true).is_none());
+        assert!(!dismissal.consume("invented-token"));
+        let attempt = dismissal.begin_write().unwrap();
+        let token = dismissal.finish_write(attempt, true, true).unwrap();
+        assert!(dismissal.consume(&token));
+    }
+    #[test]
+    fn duplicate_copy_is_blocked_during_write_and_dismissal() {
+        let mut dismissal = CopyDismissal::default();
+        let attempt = dismissal.begin_write().unwrap();
+        assert!(dismissal.begin_write().is_none());
+        let token = dismissal.finish_write(attempt, true, true).unwrap();
+        assert!(dismissal.begin_write().is_none());
+        assert!(dismissal.consume(&token));
+        assert!(dismissal.begin_write().is_some());
+    }
+    #[test]
+    fn completion_and_fallback_can_consume_success_only_once() {
+        for animation_first in [true, false] {
+            let mut dismissal = CopyDismissal::default();
+            let attempt = dismissal.begin_write().unwrap();
+            let token = dismissal.finish_write(attempt, true, true).unwrap();
+            assert!(
+                !dismissal.consume("wrong-token"),
+                "wrong completion does not cancel the fallback"
+            );
+            assert!(
+                dismissal.consume(&token),
+                "first completion (animation={animation_first}) hides"
+            );
+            assert!(!dismissal.consume(&token), "second completion is a no-op");
+        }
+    }
+    #[test]
+    fn reopened_window_rejects_old_completion_and_old_fallback() {
+        let mut dismissal = CopyDismissal::default();
+        let attempt = dismissal.begin_write().unwrap();
+        let old_token = dismissal.finish_write(attempt, true, true).unwrap();
+        dismissal.invalidate(); // Hide / Escape.
+        dismissal.invalidate(); // Reopen, tray Show or shortcut.
+        assert!(!dismissal.consume(&old_token));
+        let next = dismissal.begin_write().unwrap();
+        let new_token = dismissal.finish_write(next, true, true).unwrap();
+        assert_ne!(old_token, new_token);
+        assert!(
+            !dismissal.consume(&old_token),
+            "old fallback must not consume the new dismissal"
+        );
+        assert!(dismissal.consume(&new_token));
+    }
+    #[test]
+    fn presentation_change_during_native_write_suppresses_animation_and_hide() {
+        for visible in [false, true] {
+            let mut dismissal = CopyDismissal::default();
+            let attempt = dismissal.begin_write().unwrap();
+            dismissal.invalidate(); // Hide, show, lock or quit while the OS is writing.
+            assert!(
+                dismissal.begin_write().is_none(),
+                "do not overlap the old OS write"
+            );
+            assert!(dismissal.finish_write(attempt, true, visible).is_none());
+            assert!(dismissal.begin_write().is_some());
+        }
+    }
+    #[test]
+    fn hidden_success_has_no_dismissal_and_repeated_write_completion_is_ignored() {
+        let mut dismissal = CopyDismissal::default();
+        let attempt = dismissal.begin_write().unwrap();
+        assert!(dismissal
+            .finish_write(attempt.clone(), true, false)
+            .is_none());
+        assert!(dismissal.finish_write(attempt, true, true).is_none());
+        assert!(dismissal.begin_write().is_some());
     }
     #[test]
     fn limits_measure_utf8_without_normalizing() {

@@ -297,7 +297,62 @@ async function main() {
     assert.equal(afterClick.syntheticClipboard, firstEntry.text, 'left-extension pointer click recopies the exact first card text');
     assert.deepEqual(afterClick.state.entries, beforeSweep.state.entries, 'copying the left extension never mutates history');
     fs.writeFileSync('artifacts/pupa-native-left-click-report.json', JSON.stringify({ cardId: firstEntry.id, point: leftPoint, outsideEveryRestingRectangle: true, clipboardChangedOnlyAfterClick: true, exactTextCopied: true, hiddenAfterClick: true }, null, 2) + '\n');
-    console.log('PASS: native Tauri startup, Rust commands/events, synthetic clipboard capture, memory-only default, keyboard copy-and-hide, repeated toggle/Escape, pause baseline, pin/delete/clear, seven-card resting/expanded native screenshots, real pointer sweep 1→7→1, stable hover/return/leave without copy, keyboard after pointer, explicit left-extension pointer click with exact copy-and-hide.');
+    // Exercise the native handshake without renderer animation. Commands in the
+    // pending probe share one in-page async call, avoiding HTTP round-trip gaps
+    // against the 650 ms safety fallback and requiring no sub-100 ms assertion.
+    await invoke('smoke_toggle');
+    await waitFor(async () => (await invoke('smoke_state')).visible, 'reopen for native dismissal handshake');
+    const missingCopy = await invoke('copy_entry', { id: 'missing-synthetic-entry' });
+    assert.equal(missingCopy.ok, false);
+    assert.equal(missingCopy.dismissToken, undefined, 'failed native copy never grants a dismissal token');
+    assert.equal((await invoke('smoke_state')).visible, true, 'failed native copy retains the window');
+    const pendingProbe = await request('POST', `/session/${sessionId}/execute/async`, {
+      script: `
+        const done = arguments[arguments.length - 1];
+        const id = arguments[0];
+        const invoke = window.__TAURI_INTERNALS__.invoke.bind(window.__TAURI_INTERNALS__);
+        (async () => {
+          const copied = await invoke('copy_entry', { id });
+          const duplicate = await invoke('copy_entry', { id });
+          const pending = await invoke('smoke_state');
+          const completion = copied.dismissToken ? await invoke('complete_copy_dismissal', { token: copied.dismissToken }) : null;
+          return { copied, duplicate, pending, completion };
+        })().then(value => done({ value }), error => done({ error: String(error) }));`,
+      args: [firstEntry.id],
+    });
+    assert.equal(pendingProbe.error, undefined);
+    assert.equal(pendingProbe.value.copied.ok, true);
+    assert.ok(typeof pendingProbe.value.copied.dismissToken === 'string' && pendingProbe.value.copied.dismissToken.length > 0);
+    assert.equal(pendingProbe.value.duplicate.ok, false, 'a second native copy is blocked while dismissal is pending');
+    assert.equal(pendingProbe.value.pending.visible, true, 'successful copy waits for completion rather than hiding immediately');
+    assert.equal(pendingProbe.value.pending.syntheticClipboard, firstEntry.text);
+    assert.equal(pendingProbe.value.completion.ok, true);
+    await waitFor(async () => !(await invoke('smoke_state')).visible, 'explicit native copy-dismissal completion');
+
+    await invoke('smoke_toggle');
+    await waitFor(async () => (await invoke('smoke_state')).visible, 'reopen for native dismissal fallback');
+    const fallbackCopy = await invoke('copy_entry', { id: firstEntry.id });
+    assert.equal(fallbackCopy.ok, true);
+    assert.ok(typeof fallbackCopy.dismissToken === 'string' && fallbackCopy.dismissToken.length > 0);
+    await waitFor(async () => !(await invoke('smoke_state')).visible, 'native fallback hides when renderer never completes dismissal');
+    assert.equal((await invoke('smoke_state')).syntheticClipboard, firstEntry.text);
+
+    await invoke('smoke_toggle');
+    await waitFor(async () => (await invoke('smoke_state')).visible, 'reopen for stale-dismissal race');
+    const staleCopy = await invoke('copy_entry', { id: firstEntry.id });
+    assert.equal(staleCopy.ok, true);
+    assert.ok(typeof staleCopy.dismissToken === 'string' && staleCopy.dismissToken.length > 0);
+    await invoke('hide');
+    await waitFor(async () => !(await invoke('smoke_state')).visible, 'explicit hide invalidates pending dismissal');
+    await invoke('smoke_toggle');
+    await waitFor(async () => (await invoke('smoke_state')).visible, 'new presentation after pending dismissal');
+    assert.equal((await invoke('complete_copy_dismissal', { token: staleCopy.dismissToken })).ok, true, 'stale completion is an acknowledged no-op');
+    await sleep(900); // Exceeds the native 650 ms fallback after the new presentation.
+    assert.equal((await invoke('smoke_state')).visible, true, 'stale completion and fallback cannot hide a reopened window');
+    assert.equal(await execute('return document.querySelector(".fan-stage").classList.contains("is-copy-dismiss")'), false, 'reopened renderer has no stale dismissal animation');
+    fs.writeFileSync('artifacts/pupa-native-dismissal-report.json', JSON.stringify({ failureHasNoToken: true, pendingDuplicateBlocked: true, explicitCompletionHides: true, nativeFallbackHides: true, reopenedWindowSurvivesStaleCompletionAndFallback: true }, null, 2) + '\n');
+
+    console.log('PASS: native Tauri startup, Rust commands/events, synthetic clipboard capture, memory-only default, keyboard copy-and-hide, repeated toggle/Escape, pause baseline, pin/delete/clear, seven-card resting/expanded native screenshots, real pointer sweep 1→7→1, stable hover/return/leave without copy, keyboard after pointer, explicit left-extension pointer click with exact copy-and-hide, pending dismissal/duplicate/fallback/reopen token safety.');
   } finally {
     if (sessionId) await request('DELETE', `/session/${sessionId}`).catch(error => console.error('WebDriver cleanup:', error.message));
     driver?.kill('SIGTERM');

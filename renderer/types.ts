@@ -38,9 +38,11 @@ export interface State {
   };
 }
 export interface Result { ok: boolean; error?: string }
+export interface CopyResult extends Result { dismissToken?: string }
 export interface PupaBridge {
   getState(): Promise<State>;
-  copyEntry(id: string): Promise<Result>;
+  copyEntry(id: string): Promise<CopyResult>;
+  completeCopyDismissal(token: string): Promise<Result>;
   deleteEntry(id: string): Promise<Result>;
   togglePin(id: string): Promise<Result>;
   clearHistory(): Promise<Result>;

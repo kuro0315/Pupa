@@ -1,6 +1,6 @@
 [package]
 name = "pupa"
-version = "0.2.0"
+version = "0.2.1"
 description = "Private, local clipboard cards"
 authors = ["Pupa contributors"]
 license = "MIT"

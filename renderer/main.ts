@@ -58,6 +58,9 @@ let filteredEntries: ClipboardEntry[] = [];
 let shownEntries: ClipboardEntry[] = [];
 let pageOffset = 0;
 let copying = false;
+let copyEpoch = 0;
+let pendingDismissToken: string | null = null;
+let dismissTimer: ReturnType<typeof setTimeout> | undefined;
 let copiedId: string | null = null;
 let animateNext = true;
 let recording = false;
@@ -102,7 +105,7 @@ async function mutate(action: () => Promise<Result>, success?: string) {
   } catch { showToast('アプリとの接続を確認してください。', true); return false; }
 }
 function updateExpansion() {
-  const activeId = interactionMode === 'pointer' ? hoverId : keyboardId;
+  const activeId = pendingDismissToken && copiedId ? copiedId : interactionMode === 'pointer' ? hoverId : keyboardId;
   for (const slot of deck.querySelectorAll<HTMLElement>('.card-slot')) {
     const expanded = slot.dataset.id === activeId;
     slot.classList.toggle('is-expanded', expanded);
@@ -146,17 +149,49 @@ function pointAtCard(id: string | null) {
 function isUtilityTarget(target: Element | null) {
   return !!target?.closest('dialog, .search-popover, .preview-controls, .preview-launcher, .empty-state, .toast');
 }
+function cancelCopyFeedback() {
+  copyEpoch++; clearTimeout(dismissTimer); dismissTimer = undefined;
+  pendingDismissToken = null; copying = false; copiedId = null; clearTimeout(copiedTimer);
+  stage.classList.remove('is-copy-dismiss', 'is-copy-dismissed');
+  deck.querySelectorAll('.is-copy-confirmed').forEach(slot => slot.classList.remove('is-copy-confirmed'));
+  $('#fan-viewport').inert = stage.classList.contains('is-tucked');
+}
+async function finishCopyDismissal(token: string, epoch: number) {
+  if (epoch !== copyEpoch || pendingDismissToken !== token) return;
+  stage.classList.add('is-copy-dismissed');
+  try {
+    const result = await bridge.completeCopyDismissal(token);
+    if (epoch !== copyEpoch || pendingDismissToken !== token) return;
+    if (!result.ok) { cancelCopyFeedback(); showToast('コピーしました。ウィンドウを閉じられませんでした。', true); return; }
+    if (preview) hidePreview(false);
+    // Native hiding is token-scoped. Never issue a generic hide here: a newer
+    // shown event may already refer to a different window presentation.
+  } catch {
+    if (epoch !== copyEpoch) return;
+    cancelCopyFeedback(); showToast('コピーしました。ウィンドウを閉じられませんでした。', true);
+  }
+}
 async function copyEntry(entry: ClipboardEntry) {
   if (copying) return;
   copying = true;
+  const epoch = ++copyEpoch;
   try {
-    if (!await mutate(() => bridge.copyEntry(entry.id))) return;
-    copiedId = entry.id; clearTimeout(copiedTimer); renderCards();
+    const result = await bridge.copyEntry(entry.id);
+    if (epoch !== copyEpoch) return;
+    if (!result.ok) { showToast(result.error || 'コピーできませんでした。もう一度お試しください。', true); return; }
+    // No token means that the window changed while the actual clipboard write
+    // was in flight. The successful old write must not animate this new view.
+    if (!result.dismissToken) return;
+    pendingDismissToken = result.dismissToken; copiedId = entry.id; renderCards();
     if (preview) showToast('プレビュー: 実際のコピーは行いません');
-    else bridge.hide();
-    copiedTimer = setTimeout(() => { copiedId = null; renderCards(); }, 1700);
-    if (preview) previewTimer = setTimeout(hidePreview, 550);
-  } finally { copying = false; }
+    stage.classList.add('is-copy-dismiss'); $('#fan-viewport').inert = true;
+    const duration = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 260;
+    dismissTimer = setTimeout(() => { void finishCopyDismissal(result.dismissToken!, epoch); }, duration);
+  } catch {
+    if (epoch === copyEpoch) showToast('アプリとの接続を確認してください。', true);
+  } finally {
+    if (epoch === copyEpoch && !pendingDismissToken) copying = false;
+  }
 }
 function cardAction(name: keyof typeof icons, label: string, action: string, callback: () => void) {
   const button = make('button', 'card-icon'); button.type = 'button'; button.innerHTML = icon(name); button.setAttribute('aria-label', label); button.title = label; button.dataset.action = action;
@@ -250,7 +285,7 @@ function renderCards() {
   cardRegions = geometry.map((region, index) => ({ ...region, id: shownEntries[index].id }));
   shownEntries.forEach((entry, index) => {
     const { angle, left, top, expandedX, expandedY, expandedAngle, scale } = geometry[index];
-    const slot = make('article', `card-slot${animateNext ? ' deal-in' : ''}`);
+    const slot = make('article', `card-slot${animateNext ? ' deal-in' : ''}${copiedId === entry.id ? ' is-copy-confirmed' : ''}`);
     slot.dataset.id = entry.id; slot.dataset.order = String(index + 1); slot.dataset.testid = 'clipboard-card'; slot.setAttribute('role', 'listitem');
     slot.style.setProperty('--angle', `${angle}deg`); slot.style.setProperty('--inverse-angle', `${-angle}deg`); slot.style.setProperty('--card-index', String(index)); slot.style.zIndex = String(index + 1);
     slot.style.left = `${left.toFixed(2)}px`; slot.style.top = `${top.toFixed(2)}px`;
@@ -356,9 +391,10 @@ function openSettings() {
   renderSettingsStatus(); stopRecording(); openDialog(settingsDialog);
 }
 function stopRecording() { recording = false; $('#record-shortcut').textContent = 'キーを記録'; $('#record-shortcut').classList.remove('recording'); $('#shortcut-help').textContent = '例: CommandOrControl+Shift+Space'; }
-function hidePreview() { if (!preview) return; clearTimeout(previewTimer); stage.classList.add('is-tucked'); $('#fan-viewport').inert = true; $('#search-popover').hidden = true; $('#preview-launcher').hidden = false; $('#preview-launcher').focus({ preventScroll: true }); }
-function hideApp() { if (preview) hidePreview(); else bridge.hide(); }
+function hidePreview(cancelPending = true) { if (!preview) return; if (cancelPending) { cancelCopyFeedback(); bridge.hide(); } clearTimeout(previewTimer); stage.classList.add('is-tucked'); $('#fan-viewport').inert = true; $('#search-popover').hidden = true; $('#preview-launcher').hidden = false; $('#preview-launcher').focus({ preventScroll: true }); }
+function hideApp() { if (preview) hidePreview(); else { cancelCopyFeedback(); bridge.hide(); } }
 function resetForShown() {
+  cancelCopyFeedback();
   if (settingsDialog.open) settingsDialog.close();
   if (clearDialog.open) clearDialog.close();
   clearTimeout(copiedTimer); copiedId = null; clearTimeout(toastTimer); $('#toast').hidden = true;
@@ -367,7 +403,7 @@ function resetForShown() {
 function revealPreview() { if (!preview) return; clearTimeout(previewTimer); stage.classList.remove('is-tucked'); $('#fan-viewport').inert = false; $('#preview-launcher').hidden = true; resetForShown(); }
 
 stage.addEventListener('pointermove', (event) => {
-  if (event.pointerType === 'touch' || settingsDialog.open || clearDialog.open || stage.classList.contains('is-tucked')) return;
+  if (copying || event.pointerType === 'touch' || settingsDialog.open || clearDialog.open || stage.classList.contains('is-tucked')) return;
   const moved = !lastPointerPosition || event.clientX !== lastPointerPosition.x || event.clientY !== lastPointerPosition.y;
   lastPointerPosition = { x: event.clientX, y: event.clientY };
   if (!moved) return;
@@ -378,11 +414,11 @@ stage.addEventListener('pointermove', (event) => {
   if (!region && interactionMode === 'keyboard') return;
   pointAtCard(region?.id ?? null);
 }, true);
-stage.addEventListener('pointerleave', () => { if (interactionMode === 'pointer') pointAtCard(null); });
-window.addEventListener('blur', () => { if (interactionMode === 'pointer') pointAtCard(null); });
+stage.addEventListener('pointerleave', () => { if (!copying && interactionMode === 'pointer') pointAtCard(null); });
+window.addEventListener('blur', () => { if (!copying && interactionMode === 'pointer') pointAtCard(null); });
 stage.addEventListener('pointerdown', (event) => {
   pointerPressId = null;
-  if (event.button !== 0 || settingsDialog.open || clearDialog.open) return;
+  if (copying || event.button !== 0 || settingsDialog.open || clearDialog.open) return;
   const target = event.target instanceof Element ? event.target : null;
   if (isUtilityTarget(target) || target?.closest('.card-icon')) return;
   const visibleCard = target?.closest('.card-copy')?.closest<HTMLElement>('.card-slot.is-expanded');
@@ -396,8 +432,14 @@ stage.addEventListener('pointercancel', () => { pointerPressId = null; });
 stage.addEventListener('click', (event) => {
   // Keyboard activation belongs to its focused button. Pointer clicks resolve
   // through the same stable map as hover, even during the pull animation.
-  if (event.detail === 0 || event.button !== 0 || settingsDialog.open || clearDialog.open) return;
   const target = event.target instanceof Element ? event.target : null;
+  if (copying) {
+    if (target?.closest('#preview-launcher, #preview-replay')) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    if (target?.closest('#backdrop')) hideApp();
+    return;
+  }
+  if (event.detail === 0 || event.button !== 0 || settingsDialog.open || clearDialog.open) return;
   if (isUtilityTarget(target)) return;
   const tool = target?.closest('.card-icon');
   if (tool?.closest('.card-slot.is-expanded')) return;
@@ -472,6 +514,7 @@ document.addEventListener('keydown', (event) => {
   }
   if (settingsDialog.open || clearDialog.open) return;
   if (event.key === 'Escape') { event.preventDefault(); if (!$('#search-popover').hidden) closeSearch(true); else hideApp(); return; }
+  if (copying) { event.preventDefault(); return; }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') { event.preventDefault(); openSearch(); return; }
   if (event.altKey || event.metaKey || event.ctrlKey || stage.classList.contains('is-tucked')) return;
   const target = event.target as HTMLElement;
@@ -494,8 +537,8 @@ window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer
 const applyState = createStateReceiver((next) => { state = next; render(); });
 const unsubscribeState = bridge.onState(applyState);
 const unsubscribeShown = bridge.onShown(resetForShown);
-const unsubscribeSettings = bridge.onSettings?.(openSettings) ?? (() => {});
-window.addEventListener('pagehide', () => { unsubscribeState(); unsubscribeShown(); unsubscribeSettings(); clearTimeout(toastTimer); clearTimeout(copiedTimer); clearTimeout(previewTimer); clearTimeout(resizeTimer); }, { once: true });
+const unsubscribeSettings = bridge.onSettings?.(() => { cancelCopyFeedback(); openSettings(); }) ?? (() => {});
+window.addEventListener('pagehide', () => { cancelCopyFeedback(); unsubscribeState(); unsubscribeShown(); unsubscribeSettings(); clearTimeout(toastTimer); clearTimeout(copiedTimer); clearTimeout(previewTimer); clearTimeout(resizeTimer); }, { once: true });
 void bridge.getState().then((next) => { applyState(next); stage.focus({ preventScroll: true }); }).catch(() => {
   $('#empty-state').hidden = false; $('#empty-label').textContent = '履歴を読み込めませんでした'; showToast('Pupaを再起動してください。', true);
 });

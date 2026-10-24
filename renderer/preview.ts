@@ -15,18 +15,24 @@ export function createPreviewBridge(): PupaBridge {
     paused: false,
     status: { shortcutRegistered: true, storageWarning: null, platform: /Mac/.test(navigator.platform) ? 'darwin' : 'linux', wayland: false, version: '0.2.0' },
   };
+  let copySequence = 0;
+  let pendingDismissal: string | null = null;
   const listeners = new Set<(next: State) => void>();
   const emit = () => { state = structuredClone(state); for (const fn of listeners) fn(state); return { ok: true }; };
   return {
     getState: async () => structuredClone(state),
     // Preview intentionally does not claim to access the system clipboard.
-    copyEntry: async (id) => ({ ok: state.entries.some((entry) => entry.id === id) }),
+    copyEntry: async (id) => {
+      if (!state.entries.some((entry) => entry.id === id) || pendingDismissal) return { ok: false };
+      pendingDismissal = `preview-${++copySequence}`; return { ok: true, dismissToken: pendingDismissal };
+    },
+    completeCopyDismissal: async (token) => { if (token === pendingDismissal) pendingDismissal = null; return { ok: true }; },
     deleteEntry: async (id) => { state.entries = state.entries.filter((entry) => entry.id !== id); return emit(); },
     togglePin: async (id) => { const entry = state.entries.find((item) => item.id === id); if (entry) entry.pinned = !entry.pinned; return emit(); },
     clearHistory: async () => { state.entries = []; return emit(); },
     setPaused: async (paused) => { state.paused = paused; return emit(); },
     updateSettings: async ({ confirmHistoryReduction: _confirmation, ...settings }) => { state.settings = { ...state.settings, ...settings }; return emit(); },
-    hide: () => {},
+    hide: () => { pendingDismissal = null; },
     quit: () => {},
     onState: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
     onShown: () => () => {},

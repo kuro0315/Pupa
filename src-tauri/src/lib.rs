@@ -7,7 +7,7 @@ pub use desktop::{run, set_session_blocked};
 #[cfg(feature = "desktop")]
 mod desktop {
     use crate::{
-        history::{CaptureLifecycle, Entry, History, Settings, MAX_TEXT_BYTES},
+        history::{CaptureLifecycle, CopyDismissal, Entry, History, Settings, MAX_TEXT_BYTES},
         storage::Storage,
     };
     use serde::Serialize;
@@ -47,10 +47,13 @@ mod desktop {
         status: Status,
     }
     #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
     struct ActionResult {
         ok: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dismiss_token: Option<String>,
     }
     impl ActionResult {
         fn from(result: Result<(), String>) -> Self {
@@ -58,10 +61,12 @@ mod desktop {
                 Ok(()) => Self {
                     ok: true,
                     error: None,
+                    dismiss_token: None,
                 },
                 Err(error) => Self {
                     ok: false,
                     error: Some(error),
+                    dismiss_token: None,
                 },
             }
         }
@@ -70,6 +75,7 @@ mod desktop {
         history: History,
         settings: Settings,
         lifecycle: CaptureLifecycle,
+        copy_dismissal: CopyDismissal,
         status: Status,
         settings_busy: bool,
         source_busy: bool,
@@ -219,6 +225,7 @@ mod desktop {
                 return;
             }
             core.lifecycle.invalidate_source();
+            core.copy_dismissal.invalidate();
             core.blur_generation = core.blur_generation.wrapping_add(1);
             core.shown_at = Instant::now();
             core.visible = true;
@@ -238,6 +245,7 @@ mod desktop {
         if let Some(backend) = app.try_state::<Backend>() {
             let mut core = backend.core();
             core.visible = false;
+            core.copy_dismissal.invalidate();
             core.blur_generation = core.blur_generation.wrapping_add(1);
         }
         if let Some(window) = app.get_webview_window("main") {
@@ -283,7 +291,11 @@ mod desktop {
                 core.lifecycle.suspended = value;
             }
             core.lifecycle.reconcile();
-            core.lifecycle.locked || core.lifecycle.suspended
+            let blocked = core.lifecycle.locked || core.lifecycle.suspended;
+            if blocked {
+                core.copy_dismissal.invalidate();
+            }
+            blocked
         };
         if blocked {
             hide_window(app);
@@ -293,6 +305,7 @@ mod desktop {
         if let Some(backend) = app.try_state::<Backend>() {
             let mut core = backend.core();
             core.lifecycle.quitting = true;
+            core.copy_dismissal.invalidate();
             core.lifecycle.reconcile();
         }
         let _ = app.global_shortcut().unregister_all();
@@ -458,20 +471,39 @@ mod desktop {
         let snapshot = backend.core().snapshot();
         Ok(snapshot)
     }
+    /// Both animation completion and fallback are checked on the GUI thread,
+    /// together with hiding. A queued completion cannot close a newer show.
+    fn dismiss_copy(app: &AppHandle, token: String) -> Result<(), String> {
+        let handle = app.clone();
+        app.run_on_main_thread(move || {
+            let Some(backend) = handle.try_state::<Backend>() else {
+                return;
+            };
+            let should_hide = {
+                let mut core = backend.core();
+                core.visible && core.copy_dismissal.consume(&token)
+            };
+            if should_hide {
+                hide_now(&handle);
+            }
+        })
+        .map_err(|_| "カードを閉じられませんでした。Esc キーを押してください。".to_string())
+    }
     #[tauri::command]
     async fn copy_entry(app: AppHandle, window: WebviewWindow, id: String) -> ActionResult {
-        ActionResult::from((|| {
+        let result = (|| -> Result<Option<String>, String> {
             authorize(&app, &window)?;
             let backend = app.state::<Backend>();
-            let text = {
+            let (text, attempt) = {
                 let mut core = backend.core();
-                if core.lifecycle.copying {
-                    return Err("コピーしています。少し待ってお試しください。".into());
-                }
                 let text = core.history.get(&id).ok_or(MISSING_ENTRY)?.text.clone();
+                let attempt = core
+                    .copy_dismissal
+                    .begin_write()
+                    .ok_or("コピーしています。少し待ってお試しください。")?;
                 core.lifecycle.copying = true;
                 core.lifecycle.reconcile();
-                text
+                (text, attempt)
             };
             let copied = if backend.synthetic {
                 *backend
@@ -485,17 +517,52 @@ mod desktop {
                         .to_string()
                 })
             };
-            {
+            let dismiss_token = {
                 let mut core = backend.core();
                 core.lifecycle.copying = false;
                 core.lifecycle.reconcile();
                 if copied.is_ok() {
                     core.lifecycle.monitor.note_copied(&text);
                 }
-            }
+                let visible = core.visible;
+                core.copy_dismissal
+                    .finish_write(attempt, copied.is_ok(), visible)
+            };
             copied?;
-            hide_window(&app);
-            Ok(())
+            if let Some(token) = dismiss_token.clone() {
+                let handle = app.clone();
+                // Renderer normally finishes in ~240 ms. A lost event, frozen
+                // animation, or renderer error must not leave a copied hand open.
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(650));
+                    let _ = dismiss_copy(&handle, token);
+                });
+            }
+            Ok(dismiss_token)
+        })();
+        match result {
+            Ok(dismiss_token) => ActionResult {
+                ok: true,
+                error: None,
+                dismiss_token,
+            },
+            Err(error) => ActionResult::from(Err(error)),
+        }
+    }
+    #[tauri::command]
+    async fn complete_copy_dismissal(
+        app: AppHandle,
+        window: WebviewWindow,
+        token: String,
+    ) -> ActionResult {
+        ActionResult::from((|| {
+            authorize(&app, &window)?;
+            if token.len() > 100 {
+                return Err("コピーの完了情報が正しくありません。".into());
+            }
+            // Unknown, already-consumed and stale tokens are intentionally no-ops.
+            // The renderer cannot mint a successful native write by completing.
+            dismiss_copy(&app, token)
         })())
     }
     #[tauri::command]
@@ -766,7 +833,7 @@ mod desktop {
                 if storage.save_settings(&loaded.settings).is_err(){warning=Some("設定を保存できませんでした。この起動中はメモリだけで動作します。".into());}
                 let wayland=cfg!(target_os="linux")&&(std::env::var_os("WAYLAND_DISPLAY").is_some()||std::env::var("XDG_SESSION_TYPE").as_deref()==Ok("wayland"));
                 let status=Status{shortcut_registered:false,storage_warning:warning,platform:if cfg!(target_os="macos"){"darwin"}else if cfg!(target_os="windows"){"win32"}else{"linux"},wayland,version:app.package_info().version.to_string()};
-                app.manage(Backend{core:Mutex::new(Core{history,settings:loaded.settings,lifecycle:CaptureLifecycle::default(),status,settings_busy:false,source_busy:false,visible:false,shown_at:Instant::now(),blur_generation:0,snapshot_revision:0}),storage,synthetic,synthetic_clipboard:Mutex::new(None),_test_directory:test_directory});
+                app.manage(Backend{core:Mutex::new(Core{history,settings:loaded.settings,lifecycle:CaptureLifecycle::default(),copy_dismissal:CopyDismissal::default(),status,settings_busy:false,source_busy:false,visible:false,shown_at:Instant::now(),blur_generation:0,snapshot_revision:0}),storage,synthetic,synthetic_clipboard:Mutex::new(None),_test_directory:test_directory});
                 let config=app.config().app.windows.iter().find(|w|w.label=="main").ok_or("Missing main window configuration")?;
                 let dev_url=app.config().build.dev_url.clone();
                 tauri::WebviewWindowBuilder::from_config(app,config)?.on_navigation(move|url|local_url(url,dev_url.as_ref()))
@@ -803,6 +870,7 @@ mod desktop {
         let builder = builder.invoke_handler(tauri::generate_handler![
             get_state,
             copy_entry,
+            complete_copy_dismissal,
             delete_entry,
             toggle_pin,
             clear_history,
@@ -820,6 +888,7 @@ mod desktop {
         let builder = builder.invoke_handler(tauri::generate_handler![
             get_state,
             copy_entry,
+            complete_copy_dismissal,
             delete_entry,
             toggle_pin,
             clear_history,
@@ -836,6 +905,7 @@ mod desktop {
         let builder = builder.invoke_handler(tauri::generate_handler![
             get_state,
             copy_entry,
+            complete_copy_dismissal,
             delete_entry,
             toggle_pin,
             clear_history,
