@@ -1,9 +1,8 @@
 <p align="center">
-  <img src="docs/media/pupa-wordmark.svg" width="100%" alt="PUPA — Your clipboard. Unfolded.">
+  <img src="docs/media/pupa-wordmark.svg" width="100%" alt="PUPA">
 </p>
 
-<p align="center"><strong>隠れて、ひらいて、もう一度コピー。</strong><br>
-画面の右端から現れる、クリップボードのカードデッキ。</p>
+クリップボードマネージャーです。
 
 <p align="center">
   <a href="#download">ダウンロード</a> ·
@@ -13,14 +12,6 @@
 </p>
 
 <p align="center"><a href="https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml">実画面・アニメーションは CI の UI Artifacts で確認できます</a></p>
-
-**必要なときだけ、手元に。** 普段は非表示。呼び出すとカードが扇形に広がり、重ねたカードだけ大きくなる。コピーできたら、また隠れます。
-
-**自分のデッキに。** 小さな歯車から、履歴の数・扇の角度・画面端からの距離を調整。アプリ名と薄いアイコンは、検出時の前面アプリを手がかりに表示します。
-
-**Tauri + Rust。** Electron を同梱せず、OS の WebView を使うデスクトップアプリ。
-
-**端末の中だけ。** アカウントも通信も不要。履歴は初期設定ではメモリだけ、ファイルへの保存は自分で選べます。
 
 <a id="download"></a>
 ## Download
