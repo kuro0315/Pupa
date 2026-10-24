@@ -1,0 +1,32 @@
+{
+  "name": "pupa",
+  "version": "0.1.0",
+  "description": "A little magic for your clipboard. Local-first desktop clipboard cards.",
+  "author": "kuro0315",
+  "license": "MIT",
+  "main": "electron/main.cjs",
+  "desktopName": "jp.kuro0315.pupa.desktop",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "start": "npm run build && electron .",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.cjs",
+    "test:ui": "playwright test",
+    "check": "npm run test && npm run build && npm run test:ui",
+    "dist": "npm run build && electron-builder --publish never",
+    "pack": "npm run build && electron-builder --dir --publish never"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "electron": "45.0.0",
+    "electron-builder": "26.18.0",
+    "typescript": "6.0.2",
+    "vite": "8.3.5"
+  },
+  "homepage": "https://github.com/kuro0315/Pupa",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kuro0315/Pupa.git"
+  }
+}
