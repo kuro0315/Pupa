@@ -210,6 +210,17 @@ for (const viewport of [
       expect(expanded!.x + expanded!.width).toBeLessThanOrEqual(viewport.width - 10);
       expect(expanded!.y + expanded!.height).toBeLessThanOrEqual(viewport.height - 10);
       expect(expanded!.width).toBeGreaterThan(await cards(page).nth(index).evaluate(el => (el as HTMLElement).offsetWidth));
+      const pull = await cards(page).nth(index).evaluate(el => {
+        const slot = el as HTMLElement;
+        const card = slot.querySelector<HTMLElement>('.clip-card')!;
+        const matrix = new DOMMatrixReadOnly(getComputedStyle(card).transform);
+        const restCenter = parseFloat(slot.style.left) + slot.offsetWidth / 2;
+        const rect = card.getBoundingClientRect();
+        return { scale: Math.hypot(matrix.a, matrix.b), leftward: restCenter - (rect.left + rect.width / 2) };
+      });
+      expect(pull.scale).toBeGreaterThanOrEqual(1.05);
+      expect(pull.scale).toBeLessThanOrEqual(1.1);
+      expect(pull.leftward).toBeGreaterThanOrEqual(viewport.width > 560 ? 80 : 5);
     }
     await page.locator('.fan-stage').focus();
     await page.mouse.move(0, 0);

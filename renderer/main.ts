@@ -148,12 +148,11 @@ function fanGeometry(count: number) {
   // A rotated rectangle can be wider than the unrotated card. Reserve its
   // complete diagonal so intermediate leaves also fit narrow displays.
   const cardWidth = Math.min(compact ? 360 : 440, width - margin * 2 - 30, height * .66, Math.sqrt(Math.max(1, (width - margin * 2) ** 2 - cardHeight ** 2)));
-  const scale = Math.min(compact ? 1.1 : 1.22, (width - margin * 2) / cardWidth, (height - margin * 2) / cardHeight);
   // Spreading the centers as well as the angles opens up the whole available
   // work-area height. A fixed-radius pivot would leave tall displays half empty.
   const fullness = Math.min(1, .45 + (spread - 20) / 52 * .55);
   const countSpread = Math.min(1, Math.max(0, count - 1) / 4);
-  const distance = Math.max(0, Math.min(90, configuredDistance, width - margin * 2 - cardWidth * scale));
+  const distance = Math.max(0, Math.min(90, configuredDistance, width - margin * 2 - cardWidth * (compact ? 1.1 : 1.22)));
   stage.style.setProperty('--fan-distance', `${distance.toFixed(2)}px`);
   stage.style.setProperty('--card-width', `${cardWidth.toFixed(2)}px`);
   stage.style.setProperty('--card-height', `${cardHeight.toFixed(2)}px`);
@@ -168,11 +167,18 @@ function fanGeometry(count: number) {
     // corner. Its center can move vertically independently of its rotation.
     const centerX = clamp(width - margin - distance - halfWidth, margin + halfWidth, width - margin - halfWidth);
     const centerY = height / 2 - position * Math.max(0, height / 2 - margin - halfHeight) * fullness * countSpread;
-    const expandedHalfWidth = cardWidth * scale / 2;
-    const expandedHalfHeight = cardHeight * scale / 2;
-    const expandedX = clamp(centerX - (compact ? 18 : 42), margin + expandedHalfWidth, width - margin - expandedHalfWidth);
+    // Pull the leaf out of the hand rather than zooming it: only a small lift
+    // and a trace of its original angle remain, so the text stays readable.
+    const expandedAngle = angle * .06;
+    const expandedRadians = expandedAngle * Math.PI / 180;
+    const expandedWidth = cardWidth * Math.cos(expandedRadians) + cardHeight * Math.abs(Math.sin(expandedRadians));
+    const expandedHeight = cardWidth * Math.abs(Math.sin(expandedRadians)) + cardHeight * Math.cos(expandedRadians);
+    const scale = Math.min(compact ? 1.06 : 1.08, (width - margin * 2) / expandedWidth, (height - margin * 2) / expandedHeight);
+    const expandedHalfWidth = expandedWidth * scale / 2;
+    const expandedHalfHeight = expandedHeight * scale / 2;
+    const expandedX = clamp(centerX - (compact ? 36 : 92), margin + expandedHalfWidth, width - margin - expandedHalfWidth);
     const expandedY = clamp(centerY, margin + expandedHalfHeight, height - margin - expandedHalfHeight);
-    return { angle, left: centerX - cardWidth / 2, top: centerY - cardHeight / 2, expandedX: expandedX - centerX, expandedY: expandedY - centerY, scale };
+    return { angle, left: centerX - cardWidth / 2, top: centerY - cardHeight / 2, expandedX: expandedX - centerX, expandedY: expandedY - centerY, expandedAngle, scale };
   });
 }
 function updateHistoryWarning() {
@@ -208,12 +214,12 @@ function renderCards() {
   deck.replaceChildren();
   const geometry = fanGeometry(shownEntries.length);
   shownEntries.forEach((entry, index) => {
-    const { angle, left, top, expandedX, expandedY, scale } = geometry[index];
+    const { angle, left, top, expandedX, expandedY, expandedAngle, scale } = geometry[index];
     const slot = make('article', `card-slot${animateNext ? ' deal-in' : ''}`);
     slot.dataset.id = entry.id; slot.dataset.order = String(index + 1); slot.dataset.testid = 'clipboard-card'; slot.setAttribute('role', 'listitem');
     slot.style.setProperty('--angle', `${angle}deg`); slot.style.setProperty('--inverse-angle', `${-angle}deg`); slot.style.setProperty('--card-index', String(index)); slot.style.zIndex = String(index + 1);
     slot.style.left = `${left.toFixed(2)}px`; slot.style.top = `${top.toFixed(2)}px`;
-    slot.style.setProperty('--expanded-x', `${expandedX.toFixed(2)}px`); slot.style.setProperty('--expanded-y', `${expandedY.toFixed(2)}px`); slot.style.setProperty('--expanded-scale', String(scale));
+    slot.style.setProperty('--expanded-x', `${expandedX.toFixed(2)}px`); slot.style.setProperty('--expanded-y', `${expandedY.toFixed(2)}px`); slot.style.setProperty('--expanded-scale', String(scale)); slot.style.setProperty('--expanded-angle', `${expandedAngle}deg`);
     const card = make('div', `clip-card color-${entry.color}${entry.pinned ? ' is-pinned' : ''}`);
     card.dataset.testid = 'fan-card';
     const source = entry.source?.kind === 'foreground' && typeof entry.source.name === 'string' && entry.source.name.trim() ? entry.source : undefined;
