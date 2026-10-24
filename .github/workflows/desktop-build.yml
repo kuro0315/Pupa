@@ -71,11 +71,14 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb webkit2gtk-driver dbus-x11 x11-utils ffmpeg
+          sudo apt-get install --no-install-recommends -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf xvfb webkit2gtk-driver dbus-x11 x11-utils ffmpeg python3-dbus-next xdotool
       - name: Install locked npm dependencies
         run: npm ci
       - name: Run Rust core and frontend bridge tests
         run: npm test
+      - name: Run Linux portal-feature Rust unit tests
+        if: runner.os == 'Linux'
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --no-default-features --features portal
       - name: Check locked desktop Rust build
         run: cargo check --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
       - name: Build renderer
@@ -139,6 +142,27 @@ jobs:
           GDK_BACKEND: x11
           GDK_SCALE: '2'
         run: xvfb-run -a -s '-screen 0 2880x1800x24 -dpi 96' dbus-run-session -- npm run test:native -- src-tauri/target/${{ matrix.target }}/debug/pupa
+      - name: Verify shortcut portal protocol on an isolated mock D-Bus
+        id: portal-protocol
+        continue-on-error: true
+        timeout-minutes: 5
+        if: runner.os == 'Linux'
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          PUPA_ISOLATED_DESKTOP: '1'
+          PUPA_MOCK_PORTAL_TEST: '1'
+          XDG_SESSION_TYPE: wayland
+          GDK_BACKEND: x11
+          GDK_SCALE: '1'
+          TAURI_DRIVER_PORT: '4474'
+        # Session detection selects the real portal backend, but this is a
+        # purpose-built mock on X11, NOT real Wayland or Chrome verification.
+        # The private bus has no activation directories for real portals.
+        run: |
+          /usr/bin/python3 scripts/test-mock-shortcut-portal.py
+          xvfb-run -a -s '-screen 0 1440x1000x24 -dpi 96' dbus-run-session --config-file=scripts/portal-test-bus.conf -- node scripts/portal-smoke.cjs src-tauri/target/${{ matrix.target }}/debug/pupa
+          PUPA_SMOKE_PORTAL_RESTORE=1 TAURI_DRIVER_PORT=4484 xvfb-run -a -s '-screen 0 1440x1000x24 -dpi 96' dbus-run-session --config-file=scripts/portal-test-bus.conf -- node scripts/portal-smoke.cjs src-tauri/target/${{ matrix.target }}/debug/pupa
+          PUPA_SMOKE_PORTAL_RESTORE=1 PUPA_PORTAL_RESTORE_RESPONSE=cancelled TAURI_DRIVER_PORT=4494 xvfb-run -a -s '-screen 0 1440x1000x24 -dpi 96' dbus-run-session --config-file=scripts/portal-test-bus.conf -- node scripts/portal-smoke.cjs src-tauri/target/${{ matrix.target }}/debug/pupa
       - name: Upload UI and native Tauri evidence
         if: always() && runner.os == 'Linux'
         uses: actions/upload-artifact@v7
@@ -157,6 +181,9 @@ jobs:
       # standard, ultrawide, and 2x evidence. Xvfb is not a multi-monitor claim.
       - name: Require passing native desktop checks
         if: runner.os == 'Linux' && (steps.native-standard.outcome != 'success' || steps.native-ultrawide.outcome != 'success' || steps.native-hidpi.outcome != 'success')
+        run: exit 1
+      - name: Require passing isolated portal protocol checks
+        if: runner.os == 'Linux' && steps.portal-protocol.outcome != 'success'
         run: exit 1
       - name: Package production desktop apps (no smoke feature, no signing credentials)
         if: runner.os != 'macOS'

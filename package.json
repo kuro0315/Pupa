@@ -1,6 +1,6 @@
 {
   "name": "pupa",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Local-first clipboard card fan.",
   "author": "kuro0315",
   "license": "MIT",
@@ -17,7 +17,7 @@
     "check": "npm run test && npm run build && npm run test:ui",
     "dist": "tauri build",
     "pack": "tauri build --no-bundle",
-    "test:bridge": "node --test tests/tauri-bridge.test.cjs tests/state-order.test.cjs"
+    "test:bridge": "node --test tests/tauri-bridge.test.cjs tests/state-order.test.cjs tests/linux-identity.test.cjs"
   },
   "devDependencies": {
     "@playwright/test": "1.64.1",

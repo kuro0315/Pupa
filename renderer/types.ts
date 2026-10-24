@@ -1,5 +1,6 @@
 export type EntryKind = 'text' | 'link' | 'code';
 export type EntryColor = 'mint' | 'rose' | 'lavender' | 'butter';
+export type ShortcutState = 'needs-approval' | 'requesting' | 'registered' | 'cancelled' | 'unavailable' | 'closed' | 'error';
 export interface EntrySource {
   name: string;
   icon?: string;
@@ -32,6 +33,10 @@ export interface State {
   status: {
     shortcutRegistered: boolean;
     shortcutAvailable?: boolean;
+    shortcutBackend?: 'portal' | 'native';
+    shortcutState?: ShortcutState;
+    shortcutTrigger?: string | null;
+    shortcutWarning?: string | null;
     storageWarning: string | null;
     positionWarning?: string | null;
     platform: string;
@@ -43,6 +48,7 @@ export interface Result { ok: boolean; error?: string }
 export interface CopyResult extends Result { dismissToken?: string }
 export interface PupaBridge {
   getState(): Promise<State>;
+  requestSystemShortcut(): Promise<Result>;
   copyEntry(id: string): Promise<CopyResult>;
   completeCopyDismissal(token: string): Promise<Result>;
   deleteEntry(id: string): Promise<Result>;

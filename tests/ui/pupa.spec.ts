@@ -652,3 +652,122 @@ for (const unavailable of [true, false]) {
     }
   });
 }
+
+const installPortalFixture = async (page: import('@playwright/test').Page, initialState = 'needs-approval') => {
+  await page.addInitScript(initial => {
+    const control: any = { calls: 0, copies: 0, hides: 0, patches: [], throwRequest: false, configureImmediately: false };
+    const state: any = { revision: 1, entries: [{ id: 'portal-card', text: 'Wayland fixture', kind: 'text', color: 'mint', createdAt: Date.now(), pinned: false }], settings: { shortcut: 'CommandOrControl+Shift+Space', historyLimit: 60, persistence: false, hideAfterCopy: true, sourceApp: true, fanSpread: 72, fanDistance: 0 }, paused: false, status: { shortcutBackend: 'portal', shortcutState: initial, shortcutRegistered: initial === 'registered', shortcutAvailable: initial !== 'unavailable', shortcutTrigger: initial === 'registered' ? 'Ctrl+Alt+P' : null, shortcutWarning: null, storageWarning: null, platform: 'linux', wayland: true, version: 'portal-test' } };
+    const listeners = new Set<(value: any) => void>();
+    const emit = () => { state.revision++; for (const callback of listeners) callback(structuredClone(state)); };
+    control.change = (value: string, trigger: string | null = null, warning: string | null = null) => { Object.assign(state.status, { shortcutState: value, shortcutRegistered: value === 'registered', shortcutAvailable: value !== 'unavailable', shortcutTrigger: trigger, shortcutWarning: warning }); emit(); };
+    control.finish = (value: string, trigger: string | null = null, warning: string | null = null) => { control.change(value, trigger, warning); control.resolve?.({ ok: value === 'registered', ...(warning ? { error: warning } : {}) }); control.resolve = null; };
+    (window as any).portal = control;
+    (window as any).pupa = {
+      getState: async () => structuredClone(state), onState: (callback: (value: any) => void) => { listeners.add(callback); return () => listeners.delete(callback); }, onShown: () => () => {}, hide: () => { control.hides++; }, quit: () => {},
+      copyEntry: async () => { control.copies++; return { ok: true }; },
+      requestSystemShortcut: async () => { control.calls++; if (control.throwRequest) throw new Error('Synthetic IPC failure'); if (control.configureImmediately && state.status.shortcutState === 'registered') return { ok: true }; control.change('requesting'); return new Promise(resolve => { control.resolve = resolve; }); },
+      updateSettings: async (patch: any) => { control.patches.push(patch); Object.assign(state.settings, patch); emit(); return { ok: true }; },
+    };
+  }, initialState);
+};
+
+test('portal setup is explicit, stays settings-only, and reflects only the actual approved trigger', async ({ page }) => {
+  await installPortalFixture(page); await page.goto('/'); await expect(cards(page)).toHaveCount(1);
+  expect(await page.evaluate(() => (window as any).portal.calls)).toBe(0);
+  await page.keyboard.press('ArrowDown'); await page.getByTestId('settings-button').click();
+  await expect(page.locator('#system-shortcut-controls')).toBeVisible();
+  await expect(page.locator('#native-shortcut-controls')).toBeHidden();
+  await expect(page.locator('#shortcut-input')).toBeDisabled();
+  await expect(page.locator('#system-shortcut-current')).toBeHidden();
+  await expect(page.locator('#source-app-platform-note')).toContainText('Waylandセッションでのコピー元アプリ名・アイコンの取得は未対応');
+  await expect(page.locator('.fan-stage')).not.toContainText('Waylandセッションでのコピー元');
+  expect(await page.evaluate(() => (window as any).portal.calls)).toBe(0);
+  await page.getByTestId('system-shortcut-button').click();
+  await expect(page.getByTestId('system-shortcut-button')).toBeDisabled();
+  await expect(page.locator('#system-shortcut-status')).toContainText('操作を待っています');
+  await page.getByTestId('system-shortcut-button').evaluate(el => el.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(await page.evaluate(() => (window as any).portal.calls)).toBe(1);
+  expect(await page.evaluate(() => (window as any).portal.patches)).toEqual([]);
+  expect(await page.evaluate(() => (window as any).portal.copies)).toBe(0);
+  expect(await page.evaluate(() => (window as any).portal.hides)).toBe(0);
+  await page.evaluate(() => (window as any).portal.finish('registered', 'Super+Alt+P'));
+  await expect(page.locator('#system-shortcut-trigger')).toHaveText('Super+Alt+P');
+  await expect(page.getByTestId('system-shortcut-button')).toHaveText('システム設定で変更');
+  await expect(page.getByTestId('system-shortcut-button')).toBeEnabled();
+  await page.locator('#history-limit').selectOption('30'); await page.locator('#save-settings').click();
+  const patch = await page.evaluate(() => (window as any).portal.patches[0]);
+  expect(patch.historyLimit).toBe(30); expect(patch).not.toHaveProperty('shortcut');
+  expect(await page.evaluate(() => (window as any).portal.calls)).toBe(1);
+});
+
+for (const terminal of [
+  { state: 'cancelled', warning: '許可されなかったか、キャンセルされました' },
+  { state: 'unavailable', warning: 'デスクトップが GlobalShortcuts に対応していません。' },
+  { state: 'error', warning: 'ショートカットの要求がシステムに拒否されました。' },
+]) {
+  test(`portal ${terminal.state} is accurate and retry remains explicit`, async ({ page }) => {
+    await installPortalFixture(page); await page.goto('/'); await openSettings(page);
+    await page.getByTestId('system-shortcut-button').click();
+    await page.evaluate(value => (window as any).portal.finish(value.state, null, value.warning), terminal);
+    await expect(page.locator('#system-shortcut-status')).toHaveText(terminal.warning);
+    await expect(page.locator('#settings-status')).not.toContainText('別のキー');
+    await expect(page.locator('#system-shortcut-current')).toBeHidden();
+    await expect(page.getByTestId('system-shortcut-button')).toBeEnabled();
+    await page.keyboard.press('Escape'); await openSettings(page);
+    expect(await page.evaluate(() => (window as any).portal.calls)).toBe(1);
+    await page.getByTestId('system-shortcut-button').click();
+    expect(await page.evaluate(() => (window as any).portal.calls)).toBe(2);
+    await page.evaluate(() => (window as any).portal.finish('cancelled', null, '設定をキャンセルしました。'));
+  });
+}
+
+test('portal pending request survives settings dismissal without a second request', async ({ page }) => {
+  await installPortalFixture(page); await page.goto('/'); await openSettings(page);
+  await page.getByTestId('system-shortcut-button').click(); await page.keyboard.press('Escape'); await openSettings(page);
+  await expect(page.getByTestId('system-shortcut-button')).toBeDisabled();
+  expect(await page.evaluate(() => (window as any).portal.calls)).toBe(1);
+  await page.evaluate(() => (window as any).portal.finish('registered', 'Ctrl+Alt+P'));
+  await expect(page.locator('#system-shortcut-trigger')).toHaveText('Ctrl+Alt+P');
+  await expect(page.getByTestId('system-shortcut-button')).toBeEnabled();
+});
+
+test('portal configure, binding changes, and session closure never invent an active key', async ({ page }) => {
+  await installPortalFixture(page, 'registered'); await page.goto('/'); await openSettings(page);
+  await expect(page.locator('#system-shortcut-trigger')).toHaveText('Ctrl+Alt+P');
+  await page.evaluate(() => { (window as any).portal.configureImmediately = true; });
+  await page.getByTestId('system-shortcut-button').click();
+  await expect(page.getByTestId('system-shortcut-button')).toBeEnabled();
+  await expect(page.locator('#system-shortcut-trigger')).toHaveText('Ctrl+Alt+P');
+  await page.evaluate(() => (window as any).portal.change('registered', 'Super+P'));
+  await expect(page.locator('#system-shortcut-trigger')).toHaveText('Super+P');
+  await page.evaluate(() => (window as any).portal.change('closed', null, 'システムとの接続が終了しました。'));
+  await expect(page.locator('#system-shortcut-status')).toHaveText('システムとの接続が終了しました。');
+  await expect(page.locator('#system-shortcut-current')).toBeHidden();
+  await expect(page.locator('#system-shortcut-trigger')).toHaveText('');
+  await expect(page.getByTestId('system-shortcut-button')).toHaveText('システムに再接続');
+  expect(await page.evaluate(() => (window as any).portal.calls)).toBe(1);
+});
+
+test('portal transport failure permits an explicit retry and does not submit the settings form', async ({ page }) => {
+  await installPortalFixture(page); await page.goto('/'); await openSettings(page);
+  await page.evaluate(() => { (window as any).portal.throwRequest = true; });
+  await page.getByTestId('system-shortcut-button').click();
+  await expect(page.locator('#system-shortcut-error')).toContainText('システム設定を開けませんでした');
+  await expect(page.getByTestId('system-shortcut-button')).toBeEnabled();
+  expect(await page.evaluate(() => (window as any).portal.patches)).toEqual([]);
+  await page.evaluate(() => { (window as any).portal.throwRequest = false; });
+  await page.getByTestId('system-shortcut-button').click();
+  await expect(page.locator('#system-shortcut-error')).toBeHidden();
+  await page.evaluate(() => (window as any).portal.finish('registered', null));
+  await expect(page.locator('#system-shortcut-trigger')).toHaveText('OSからキー表示は提供されていません');
+  await expect(page.locator('#system-shortcut-trigger')).not.toContainText('CommandOrControl');
+});
+
+test('non-portal shortcut controls and source-app preferences remain unchanged', async ({ page }) => {
+  await page.goto('/'); await openSettings(page);
+  await expect(page.locator('#native-shortcut-controls')).toBeVisible();
+  await expect(page.locator('#shortcut-input')).toBeEnabled();
+  await expect(page.locator('#record-shortcut')).toBeEnabled();
+  await expect(page.locator('#system-shortcut-controls')).toBeHidden();
+  await expect(page.locator('#source-app-platform-note')).toBeHidden();
+});

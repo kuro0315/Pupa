@@ -16,6 +16,7 @@ const COLORS: [&str; 4] = ["lavender", "mint", "rose", "butter"];
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     pub shortcut: String,
+    pub system_shortcut_enabled: bool,
     pub history_limit: usize,
     pub persistence: bool,
     pub hide_after_copy: bool,
@@ -27,6 +28,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             shortcut: "CommandOrControl+Shift+Space".into(),
+            system_shortcut_enabled: false,
             history_limit: 60,
             persistence: false,
             hide_after_copy: true,
@@ -74,11 +76,12 @@ impl Settings {
                         result.fan_distance = number;
                     }
                 }
-                "persistence" | "hideAfterCopy" | "sourceApp" => {
+                "persistence" | "hideAfterCopy" | "sourceApp" | "systemShortcutEnabled" => {
                     let boolean = value.as_bool().ok_or("設定の値が正しくありません。")?;
                     match key.as_str() {
                         "persistence" => result.persistence = boolean,
                         "hideAfterCopy" => result.hide_after_copy = boolean,
+                        "systemShortcutEnabled" => result.system_shortcut_enabled = boolean,
                         _ => result.source_app = boolean,
                     }
                 }
