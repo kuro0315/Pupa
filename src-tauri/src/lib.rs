@@ -936,6 +936,42 @@ mod desktop {
             });
         }
     }
+    fn restore_source_icons(app: &AppHandle) {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let names: std::collections::BTreeSet<String> = {
+            let backend = app.state::<Backend>();
+            let core = backend.core();
+            if !core.settings.source_app { return; }
+            core.history.entries.iter().filter_map(|entry| entry.source.as_ref())
+                .filter(|source| source.icon.is_none()).map(|source| source.name.clone()).collect()
+        };
+        let app = app.clone();
+        thread::spawn(move || {
+            for name in names {
+                let backend = app.state::<Backend>();
+                { let core = backend.core(); if core.lifecycle.quitting || !core.settings.source_app { break; } }
+                let Some(icon) = crate::source_app::resolve_local_icon(&name) else { continue; };
+                let changed = {
+                    let mut core = backend.core();
+                    if core.lifecycle.quitting || !core.settings.source_app { break; }
+                    let updates: Vec<_> = core.history.entries.iter().filter_map(|entry| {
+                        let mut source = entry.source.clone()?;
+                        if source.name != name || source.icon.is_some() { return None; }
+                        source.icon = Some(icon.clone());
+                        Some((entry.id.clone(), entry.revision, source))
+                    }).collect();
+                    let mut changed = false;
+                    for (id, revision, source) in updates { changed |= core.history.set_source(&id, revision, source); }
+                    if changed { backend.persist(&mut core); }
+                    changed
+                };
+                if changed { publish(&app); }
+            }
+        });
+    }
+
     #[tauri::command]
     async fn get_state(app: AppHandle, window: WebviewWindow) -> Result<Snapshot, String> {
         authorize(&app, &window)?;
@@ -1430,6 +1466,7 @@ mod desktop {
                 // Synthetic startup has no OS clipboard calls. Native reads must
                 // stay off the GUI thread (required by the Linux clipboard plugin).
                 if synthetic { poll(handle); }
+                if !synthetic { restore_source_icons(handle); }
                 if first_run||tray_result.is_err()||(!shortcut_registered&&!restoring_portal)||synthetic{show_now(handle);}
                 // Work-area changes (panels, resolution, disconnected displays)
                 // need not generate a window resize. Only query them while shown.

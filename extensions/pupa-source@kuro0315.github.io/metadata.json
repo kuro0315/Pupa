@@ -1,0 +1,7 @@
+{
+  "uuid": "pupa-source@kuro0315.github.io",
+  "name": "Pupa Source App",
+  "description": "Provides the current foreground application name to Pupa. No clipboard content, window titles or URLs are read.",
+  "shell-version": ["50"],
+  "url": "https://github.com/kuro0315/Pupa"
+}

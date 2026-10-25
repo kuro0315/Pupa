@@ -18,6 +18,23 @@ npm start
 
 `npm start` は Tauri 開発版、`npm run dev` はブラウザー用 UI プレビューです。ブラウザーのデモは実際のクリップボード・トレイ・グローバルショートカットを使いません。
 
+### Ubuntu / Debian の初回セットアップ
+
+`npm ci` がインストールするのは JavaScript の依存関係だけです。初回は Rust と OS の開発パッケージも用意します。
+
+```sh
+sudo apt update
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
+  libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+. "$HOME/.cargo/env"
+cargo --version
+rustc --version
+npm start
+```
+
+`failed to run 'cargo metadata' ... No such file or directory` は、Cargo が未インストールか、`PATH` に含まれていないときのエラーです。Rust をインストール済みなら `. "$HOME/.cargo/env"` を実行してから再試行してください。WebKitGTK などの不足が報告される場合は、上記の OS パッケージが入っているか確認します。
+
 ## 検証
 
 ```sh

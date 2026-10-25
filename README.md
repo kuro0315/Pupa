@@ -11,7 +11,10 @@
   <a href="docs/DEVELOPMENT.md">開発する</a>
 </p>
 
-<p align="center"><a href="https://github.com/kuro0315/Pupa/actions/workflows/desktop-build.yml">実画面・アニメーションは CI の UI Artifacts で確認できます</a></p>
+<p align="center">
+  <img src="docs/media/pupa-demo.gif" width="880" alt="Pupa の操作デモ。カードを呼び出し、選んでクリックすると再コピーして閉じます。">
+</p>
+<p align="center"><sub>架空のコピー内容とアプリ名を使った UI プレビューです。</sub></p>
 
 <a id="download"></a>
 ## Download
@@ -45,7 +48,7 @@
 ## Small print
 
 - **テキスト専用。** 画像・ファイル・書式保存、自動貼り付けは非対応。
-- **アプリ情報は推定。** コピー元を保証しません。取得できない環境は「アプリ不明」。Wayland のアプリ名・アイコン取得は未対応です。
+- **アプリ情報は推定。** コピー元を保証しません。取得できない環境は「アプリ不明」。GNOME / Wayland のアプリ名取得には [専用拡張機能](docs/GNOME-SOURCE.md) が必要です。アイコンは端末内のアプリから取得します。
 - **秘密を扱う前は一時停止。** 秘密の自動判定は保証しません。任意の履歴保存は暗号化されません。
 
 [プライバシーと制約](docs/PRIVACY.md) · [OS 別インストール](docs/INSTALL.md) · [開発・テスト](docs/DEVELOPMENT.md) · [正式配布までのチェックリスト](docs/DISTRIBUTION.md)

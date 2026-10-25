@@ -216,7 +216,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 
 /* Foreground-app context is explicitly an estimate. The image is decorative,
    local PNG-only, and stays well below text contrast without changing geometry. */
-.source-watermark { position: absolute; right: 35px; top: 50%; width: 132px; height: 132px; transform: translateY(-50%) rotate(-8deg); opacity: .075; pointer-events: none; user-select: none; color: var(--neon); }
+.source-watermark { position: absolute; right: 35px; top: 50%; width: 132px; height: 132px; transform: translateY(-50%) rotate(-8deg); opacity: .12; pointer-events: none; user-select: none; color: var(--neon); }
 .source-watermark>.icon,.source-watermark img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 .source-watermark svg { width: 100%; height: 100%; }
 .source-label { position: absolute; left: 53px; top: 24px; max-width: calc(100% - 155px); font-size: 8px; line-height: 13px; letter-spacing: .02em; color: #6a8b9b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

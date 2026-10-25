@@ -15,6 +15,21 @@ use std::{
 
 const TIMEOUT: Duration = Duration::from_millis(1200);
 const MAX_OUTPUT_BYTES: usize = 48 * 1024;
+const GNOME_SCRIPT: &str = concat!(include_str!("gnome-icons.js"), "\n", include_str!("gnome-source.js"));
+
+/// Resolve artwork for an already-recorded name, without querying foreground state.
+pub fn resolve_local_icon(name: &str) -> Option<String> {
+    if !cfg!(target_os = "linux") || name.is_empty() || name.chars().count() > 120 {
+        return None;
+    }
+    let output = run_bounded(
+        "/usr/bin/gjs",
+        &["-c".into(), GNOME_SCRIPT.into(), "--".into(), "icon".into(), name.into()],
+        Instant::now() + TIMEOUT,
+        &AtomicBool::new(false),
+    )?;
+    parse_source_output(&output)?.icon
+}
 
 // Fixed scripts; no application/clipboard data is interpolated into executable
 // code. The Windows executable icon must be on a fixed local drive, never UNC.
@@ -179,7 +194,13 @@ fn detect_with(
                 cancelled,
             )?)
         }
-        Platform::Linux if !wayland => {
+        Platform::Linux if wayland => parse_source_output(&run(
+            "/usr/bin/gjs",
+            &["-c".into(), GNOME_SCRIPT.into()],
+            deadline,
+            cancelled,
+        )?),
+        Platform::Linux => {
             let id = parse_x11_window_id(&run(
                 "/usr/bin/xprop",
                 &["-root".into(), "_NET_ACTIVE_WINDOW".into()],
@@ -464,9 +485,8 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_wayland_cancelled_and_expired_queries_do_not_run() {
+    fn unsupported_cancelled_and_expired_queries_do_not_run() {
         assert!(query(Platform::Other, false, &[]).1.is_empty());
-        assert!(query(Platform::Linux, true, &[]).1.is_empty());
         for (deadline, cancelled) in [
             (Instant::now() - Duration::from_secs(1), false),
             (Instant::now() + TIMEOUT, true),
@@ -479,6 +499,24 @@ mod tests {
                 |_, _, _, _| panic!("must not query OS")
             )
             .is_none());
+        }
+    }
+
+    #[test]
+    fn wayland_uses_optional_gnome_bridge_without_x11_fallback() {
+        let (source, calls) = query(
+            Platform::Linux,
+            true,
+            &[r#"{"name":"Synthetic Browser"}"#],
+        );
+        assert_eq!(source.unwrap().name, "Synthetic Browser");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "/usr/bin/gjs");
+        assert_eq!(calls[0].1, ["-c", GNOME_SCRIPT]);
+        for output in ["null", "{}", "malformed"] {
+            let (source, calls) = query(Platform::Linux, true, &[output]);
+            assert!(source.is_none());
+            assert_eq!(calls.len(), 1);
         }
     }
 

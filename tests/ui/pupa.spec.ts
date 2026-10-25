@@ -132,12 +132,36 @@ test('card gear never copies; fan controls preview, cancel and persist', async (
   await page.screenshot({path:'artifacts/pupa-settings.png'});
 });
 
-test('source labels are explicitly estimated and icons are local-only', async ({page}) => {
+test('source labels show app names without estimate suffix and icons are local-only', async ({page}) => {
   await page.goto('/');
-  await expect(page.getByTestId('source-app-label').first()).toContainText('推定');
+  await expect(page.getByTestId('source-app-label').first()).toHaveText('Memo Lab（デモ）');
   await expect(page.getByTestId('source-app-label').last()).toHaveText('アプリ不明');
   await expect(page.getByTestId('source-watermark')).toHaveCount(5);
   await expect(page.getByTestId('source-app-label').first()).toHaveAttribute('title', /保証するものではありません/);
+});
+
+test('local app icon renders as a decorative watermark and remote artwork is rejected', async ({page}) => {
+  await page.addInitScript(() => {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 64;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#218bd8'; ctx.fillRect(8, 8, 48, 48);
+    const state = {entries: [canvas.toDataURL('image/png'), 'https://example.invalid/logo.png'].map((icon, index) => ({
+      id: `icon-${index}`, text: 'Synthetic clipboard card', kind: 'text', color: 'mint', createdAt: Date.now(), pinned: false,
+      source: {name: 'Synthetic App', kind: 'foreground', icon},
+    })), settings: {shortcut: 'CommandOrControl+Shift+Space', historyLimit: 60, persistence: false},
+      paused: false, status: {shortcutRegistered: true, platform: 'linux', wayland: false, version: 'icon-test'}};
+    (window as any).pupa = {getState: async () => state, onState: () => () => {}, onShown: () => () => {}, hide() {}, quit() {}};
+  });
+  await page.goto('/');
+  const watermark = page.getByTestId('source-watermark').first();
+  await expect(watermark.locator('img')).toHaveCount(1);
+  await expect.poll(() => watermark.locator('img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(64);
+  await expect(watermark).toHaveAttribute('aria-hidden', 'true');
+  await expect(watermark).toHaveCSS('pointer-events', 'none');
+  await expect(watermark).toHaveCSS('opacity', '0.12');
+  await expect(page.getByTestId('source-app-label').first()).toHaveText('Synthetic App');
+  await expect(page.getByTestId('source-watermark').last().locator('img')).toHaveCount(0);
+  await expect(page.getByTestId('source-watermark').last().locator('svg')).toHaveCount(1);
 });
 
 test('lowering history cap requires acknowledgement including pins', async ({page}) => {
@@ -679,7 +703,7 @@ test('portal setup is explicit, stays settings-only, and reflects only the actua
   await expect(page.locator('#native-shortcut-controls')).toBeHidden();
   await expect(page.locator('#shortcut-input')).toBeDisabled();
   await expect(page.locator('#system-shortcut-current')).toBeHidden();
-  await expect(page.locator('#source-app-platform-note')).toContainText('Waylandセッションでのコピー元アプリ名・アイコンの取得は未対応');
+  await expect(page.locator('#source-app-platform-note')).toContainText('Pupa Source App拡張機能の有効化が必要');
   await expect(page.locator('.fan-stage')).not.toContainText('Waylandセッションでのコピー元');
   expect(await page.evaluate(() => (window as any).portal.calls)).toBe(0);
   await page.getByTestId('system-shortcut-button').click();
