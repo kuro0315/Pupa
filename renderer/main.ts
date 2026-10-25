@@ -170,8 +170,15 @@ function showCopyAfterimage(id: string) {
   const stageBounds = stage.getBoundingClientRect();
   const ghost = make('div', 'copy-afterimage');
   ghost.dataset.testid = 'copy-afterimage'; ghost.setAttribute('aria-hidden', 'true');
-  // A fresh, empty silhouette only. Never clone clipboard text, source icons,
-  // controls, or accessibility content into the lingering afterimage.
+  // Decorative geometry only. Never clone clipboard text, app icons or controls.
+  ghost.innerHTML = `<svg class="copy-circuit" viewBox="0 0 440 260" preserveAspectRatio="none" fill="none" aria-hidden="true">
+    <path class="copy-circuit-rim" d="M16 2H416L438 24V244L424 258H16L2 244V16Z"/>
+    <path class="copy-circuit-charge" pathLength="100" d="M16 2H416L438 24V244L424 258H16L2 244V16Z"/>
+    <path class="copy-circuit-echo" pathLength="100" d="M16 2H416L438 24V244L424 258H16L2 244V16Z"/>
+    <path class="copy-electric-arc copy-electric-arc-top" pathLength="100" d="M-12 38L12 30L4 19L40 24L55 5L77 14L103-9L124 2L149-3"/>
+    <path class="copy-electric-arc copy-electric-arc-bottom" pathLength="100" d="M289 263L319 249L331 268L351 251L375 261L393 241L417 250L449 225"/>
+    <path class="copy-electric-sparks" d="M-12 63L-24 67M76-11L80-23M451 181L465 177M364 272L369 285"/>
+  </svg>`;
   ghost.style.width = `${region.width}px`; ghost.style.height = `${region.height}px`;
   ghost.style.left = `${(bounds.left + bounds.right) / 2 - stageBounds.left - region.width / 2}px`;
   ghost.style.top = `${(bounds.top + bounds.bottom) / 2 - stageBounds.top - region.height / 2}px`;

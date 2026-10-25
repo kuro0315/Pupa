@@ -293,34 +293,51 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
 }
 
 
-/* One unmistakable success pulse, not a repeated flash: the selected yellow
-   face becomes pale cyan with a strong inset rim as the hand withdraws right.
-   An empty pose silhouette lingers, never clipboard content. Success only. */
+/* A single charge travels around the copied card, then discharges into thin
+   branching arcs. The stationary trace contains geometry only, never content. */
 .is-copy-dismiss .fan-viewport { animation: hand-copy-dismiss 300ms cubic-bezier(.45,0,.9,.4) forwards; }
 .is-copy-dismiss .card-slot { pointer-events: none; }
-.card-slot.is-copy-confirmed .clip-card { animation: card-copy-confirm 180ms ease-out 1 both; }
+.card-slot.is-copy-confirmed .clip-card { animation: card-copy-confirm 240ms ease-out 1 both; }
 .is-copy-dismissed .fan-viewport { animation: none; opacity: 0; transform: translateX(110%); }
 @keyframes card-copy-confirm {
-  0%, 100% { background-color: #ecef29; border-color: #f6ff75; box-shadow: inset 0 0 0 1px #f8ff8722; }
-  18%, 68% { background-color: #d9ffff; border-color: #ffffff; box-shadow: inset 0 0 0 4px #54e7f3; }
+  0%, 100% { border-color: #f6ff75; box-shadow: inset 0 0 0 1px #f8ff8722; }
+  24%, 62% { border-color: #a7fcff; box-shadow: inset 0 0 0 1px #52e9f4, inset 0 0 24px #35dbe526; }
 }
 @keyframes hand-copy-dismiss {
   0%, 30% { opacity: 1; transform: translateX(0); }
   100% { opacity: 0; transform: translateX(110%); }
 }
 .copy-afterimage {
-  position: absolute; z-index: 0; pointer-events: none; opacity: 0;
+  position: absolute; z-index: 2; pointer-events: none; opacity: 0;
   transform-origin: 50% 50%;
-  background: #7ff5ff38; border: 2px solid #d4ffff;
-  clip-path: polygon(0 10px,10px 0,calc(100% - 22px) 0,100% 22px,100% 100%,14px 100%,0 calc(100% - 14px));
-  box-shadow: inset 0 0 18px #7ff5ff88;
-  filter: drop-shadow(0 0 9px #5ceaff);
-  animation: card-copy-afterimage 420ms ease-out 1 forwards;
+  background: radial-gradient(ellipse at 80% 20%,#45e6ef0c,transparent 60%);
+  animation: card-copy-afterimage 420ms linear 1 forwards;
+}
+.copy-circuit { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 0 3px #36e5f4aa); }
+.copy-circuit path { vector-effect: non-scaling-stroke; stroke-linecap: square; stroke-linejoin: bevel; }
+.copy-circuit-rim { stroke: #5addeb; stroke-width: .8; opacity: .32; }
+.copy-circuit-charge { stroke: #d6ffff; stroke-width: 1.8; stroke-dasharray: 19 81; animation: circuit-charge 390ms cubic-bezier(.16,.65,.5,1) both; }
+.copy-circuit-echo { stroke: #bff34b; stroke-width: 1; stroke-dasharray: 7 93; animation: circuit-echo 390ms cubic-bezier(.16,.65,.5,1) both; }
+.copy-electric-arc { stroke: #a1faff; stroke-width: 1.3; stroke-dasharray: 100; animation: circuit-discharge 360ms ease-out both; }
+.copy-electric-arc-bottom { stroke: #d6fa75; animation-delay: 35ms; }
+.copy-electric-sparks { stroke: #c8fcff; stroke-width: 1; animation: circuit-sparks 380ms ease-out both; transform-origin: center; }
+@keyframes circuit-charge { from { stroke-dashoffset: 36; } to { stroke-dashoffset: -80; } }
+@keyframes circuit-echo { from { stroke-dashoffset: 2; } to { stroke-dashoffset: -114; } }
+@keyframes circuit-discharge {
+  0% { opacity: 0; stroke-dashoffset: 100; }
+  24% { opacity: .95; }
+  68% { opacity: .65; stroke-dashoffset: 0; }
+  100% { opacity: 0; stroke-dashoffset: -50; }
+}
+@keyframes circuit-sparks {
+  0%, 10% { opacity: 0; transform: scale(.98); }
+  30% { opacity: .9; }
+  100% { opacity: 0; transform: scale(1.07); }
 }
 @keyframes card-copy-afterimage {
   0% { opacity: 0; }
-  14% { opacity: .85; }
-  44% { opacity: .65; }
+  14% { opacity: .95; }
+  64% { opacity: .8; }
   100% { opacity: 0; }
 }
 @media(prefers-reduced-motion:reduce) {

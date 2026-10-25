@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/media/pupa-demo.gif" width="880" alt="Pupa の操作デモ。カードを呼び出し、選んでクリックすると再コピーして閉じます。">
+  <img src="docs/media/pupa-demo.gif" width="624" alt="Pupa の操作デモ。カードを呼び出し、選んでクリックすると再コピーして閉じます。">
 </p>
 <p align="center"><sub>架空のコピー内容とアプリ名を使った UI プレビューです。</sub></p>
 

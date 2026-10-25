@@ -607,7 +607,7 @@ for (const deviceScaleFactor of [1, 1.25, 2]) {
   });
 }
 
-test('successful copy visibly pulses and leaves only an empty pose afterimage during retraction', async ({ page }) => {
+test('successful copy traces an electric rim without leaking content into its afterimage', async ({ page }) => {
   await installDismissalFixture(page); await page.goto('/'); await expect(cards(page)).toHaveCount(1);
   await page.keyboard.press('ArrowDown');
   await page.evaluate(() => {
@@ -622,7 +622,7 @@ test('successful copy visibly pulses and leaves only an empty pose afterimage du
         const matrix = view.transform === 'none' ? null : new DOMMatrixReadOnly(view.transform);
         const ghost = document.querySelector<HTMLElement>('.copy-afterimage');
         const ghostRect = ghost?.getBoundingClientRect();
-        control.pulseFrames.push({ color: face.backgroundColor, border: face.borderTopColor, shadow: face.boxShadow, opacity: Number(view.opacity), x: matrix?.m41 ?? 0, ghostOpacity: ghost ? Number(getComputedStyle(ghost).opacity) : 0, ghostText: ghost?.textContent ?? '', ghostChildren: ghost?.childElementCount ?? 0, ghostX: ghostRect?.x, ghostY: ghostRect?.y });
+        control.pulseFrames.push({ color: face.backgroundColor, border: face.borderTopColor, shadow: face.boxShadow, opacity: Number(view.opacity), x: matrix?.m41 ?? 0, ghostOpacity: ghost ? Number(getComputedStyle(ghost).opacity) : 0, ghostText: ghost?.textContent ?? '', ghostChildren: ghost?.childElementCount ?? 0, ghostImages: ghost?.querySelectorAll('img, text, foreignObject, use').length ?? 0, chargeOffset: ghost ? getComputedStyle(ghost.querySelector('.copy-circuit-charge')!).strokeDashoffset : '', ghostX: ghostRect?.x, ghostY: ghostRect?.y });
       }
       if (performance.now() - start < 1200) requestAnimationFrame(sample);
     };
@@ -632,16 +632,17 @@ test('successful copy visibly pulses and leaves only an empty pose afterimage du
   await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
   await page.evaluate(() => (window as any).dismissal.resolve());
   await expect.poll(() => page.evaluate(() => (window as any).dismissal.completions)).toEqual(['dismiss-1']);
-  const frames = await page.evaluate(() => (window as any).dismissal.pulseFrames as Array<{ color: string; border: string; shadow: string; opacity: number; x: number; ghostOpacity: number; ghostText: string; ghostChildren: number; ghostX?: number; ghostY?: number }>);
-  const lit = frames.filter(frame => { const color = frame.color.match(/[\d.]+/g)?.map(Number) ?? []; return color[0] >= 200 && color[1] >= 245 && color[2] >= 240; });
+  const frames = await page.evaluate(() => (window as any).dismissal.pulseFrames as Array<{ color: string; border: string; shadow: string; opacity: number; x: number; ghostOpacity: number; ghostText: string; ghostChildren: number; ghostImages: number; chargeOffset: string; ghostX?: number; ghostY?: number }>);
+  const lit = frames.filter(frame => frame.shadow.includes('inset') && frame.border !== 'rgb(246, 255, 117)');
   expect(lit.length).toBeGreaterThanOrEqual(2);
-  expect(lit.some(frame => frame.x < 1 && frame.opacity > .99 && frame.border === 'rgb(255, 255, 255)' && frame.shadow.includes('4px'))).toBeTruthy();
+  expect(lit.some(frame => frame.x < 1 && frame.opacity > .99 && frame.shadow.includes('rgb(82, 233, 244)'))).toBeTruthy();
   expect(frames.some(frame => frame.x > 20 && frame.opacity < .95)).toBeTruthy();
   expect(frames.some(frame => frame.opacity < .05 && frame.ghostOpacity > .03)).toBeTruthy();
   const ghostFrames = frames.filter(frame => frame.ghostOpacity > .01);
   expect(ghostFrames.length).toBeGreaterThanOrEqual(4);
-  expect(ghostFrames.every(frame => frame.ghostText === '' && frame.ghostChildren === 0)).toBeTruthy();
+  expect(ghostFrames.every(frame => frame.ghostText.trim() === '' && frame.ghostChildren === 1 && frame.ghostImages === 0)).toBeTruthy();
   expect(new Set(ghostFrames.map(frame => `${frame.ghostX},${frame.ghostY}`)).size).toBe(1);
+  expect(new Set(ghostFrames.map(frame => frame.chargeOffset)).size).toBeGreaterThan(3);
   await expect(page.getByTestId('copy-afterimage')).toHaveCount(0);
   const timing = await page.evaluate(() => (window as any).dismissal.completeAt - (window as any).dismissal.successAt);
   expect(timing).toBeGreaterThanOrEqual(410); expect(timing).toBeLessThan(640);
