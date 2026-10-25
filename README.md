@@ -2,7 +2,7 @@
   <img src="docs/media/pupa-wordmark.svg" width="100%" alt="PUPA">
 </p>
 
-クリップボードマネージャーです。
+コピーしたものを、扇状のカードからすばやく選べるクリップボードマネージャーです。
 
 <p align="center">
   <a href="#download">ダウンロード</a> ·
@@ -12,9 +12,9 @@
 </p>
 
 <p align="center">
-  <img src="docs/media/pupa-demo.gif" width="624" alt="Pupa の操作デモ。カードを呼び出し、選んでクリックすると再コピーして閉じます。">
+  <img src="docs/media/pupa-demo.gif" width="624" alt="Pupa の操作デモ。カードを選択し、履歴をスクロールして、ファイルのカードを再コピーします。">
 </p>
-<p align="center"><sub>架空のコピー内容とアプリ名を使った UI プレビューです。</sub></p>
+<p align="center"><sub>架空のテキスト・ファイル参照とアプリ名を使った UI プレビューです。</sub></p>
 
 <a id="download"></a>
 ## Download
