@@ -276,6 +276,34 @@ mod desktop {
             scale_factor: monitor.scale_factor(),
         }
     }
+    #[cfg(target_os = "linux")]
+    fn compositor_pointer() -> Option<(f64, f64)> {
+        // XWayland may retain the last pointer position over an X11 surface.
+        // Query the existing optional Shell bridge once per show, never poll it.
+        use gtk::gio;
+        if std::env::var_os("WAYLAND_DISPLAY").is_none()
+            && std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("wayland")
+        {
+            return None;
+        }
+        let connection = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE).ok()?;
+        let reply = connection.call_sync(
+            Some("org.gnome.Shell"),
+            "/jp/kuro0315/Pupa/SourceApp",
+            "jp.kuro0315.Pupa.SourceApp",
+            "GetPointer",
+            None,
+            None,
+            gio::DBusCallFlags::NO_AUTO_START,
+            150,
+            gio::Cancellable::NONE,
+        ).ok()?;
+        let (json,) = reply.get::<(String,)>()?;
+        let point: serde_json::Value = serde_json::from_str(&json).ok()?;
+        let x = point.get("x")?.as_f64()?;
+        let y = point.get("y")?.as_f64()?;
+        (x.is_finite() && y.is_finite()).then_some((x, y))
+    }
     fn selected_monitor(
         window: &WebviewWindow,
         previous: Option<&MonitorGeometry>,
@@ -311,8 +339,36 @@ mod desktop {
         let primary_index = primary
             .as_ref()
             .and_then(|m| geometry::matching_monitor(&monitors, m));
-        // Tao's Linux monitor_from_point forwards physical cursor coordinates to
-        // GTK's logical monitor_at_point. Compare physical rectangles ourselves.
+        // GTK pointer coordinates are logical. Resolve the monitor before
+        // converting its origin using that monitor's scale, rather than the
+        // default root window's scale (which can belong to another display).
+        #[cfg(target_os = "linux")]
+        if previous.is_none() && backend == "x11" {
+            use gtk::gdk;
+            use gtk::prelude::*;
+            if let Some(display) = gdk::Display::default() {
+                if let Some(pointer) = display.default_seat().and_then(|seat| seat.pointer()) {
+                    let (x, y) = compositor_pointer().unwrap_or_else(|| {
+                        let (_, x, y) = pointer.position_double();
+                        (x, y)
+                    });
+                    if let Some(target) = display.monitor_at_point(x.floor() as i32, y.floor() as i32) {
+                        let bounds = target.geometry();
+                        let scale = target.scale_factor();
+                        let origin = Point {
+                            x: bounds.x().saturating_mul(scale),
+                            y: bounds.y().saturating_mul(scale),
+                        };
+                        if let Some(monitor) = monitors.iter().find(|m| {
+                            m.bounds.position == origin
+                                && m.name.as_deref() == target.model().as_deref()
+                        }) {
+                            return Some(monitor.clone());
+                        }
+                    }
+                }
+            }
+        }
         let cursor = if let Some(previous) = previous {
             // After a display disappears, prefer the OS's current monitor. If
             // unavailable, use the former target's center, not a moving pointer.

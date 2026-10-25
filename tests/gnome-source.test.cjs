@@ -38,7 +38,7 @@ function extension() {
   const context = vm.createContext({
     Gio: {DBusExportedObject: {wrapJSObject: () => exported}, DBus: {session: {}}},
     Shell: {WindowTracker: {get_default: () => ({get_window_app: () => app})}},
-    Main: main, global: {display}, Extension: class {},
+    Main: main, global: {display, get_pointer: () => [3100, 2100, 0]}, Extension: class {},
   });
   const code = fs.readFileSync(path.join(root, 'extensions/pupa-source@kuro0315.github.io/extension.js'), 'utf8')
     .replace(/^import .*;\n/gm, '').replace('export default class', 'class');
@@ -64,6 +64,15 @@ test('GNOME extension returns unknown for lock, overview, no focus, missing app 
   f.display.focus_window = {}; f.setApp(null); assert.equal(f.instance.GetSource(), 'null');
   f.setApp({get_id: () => 'jp.kuro0315.pupa.desktop'});
   assert.equal(f.instance.GetSource(), 'null');
+});
+
+test('placement reads the live compositor pointer even over a native Wayland app', () => {
+  const f = extension();
+  f.display.focus_window = null;
+  f.main.overview.visible = true;
+  assert.deepEqual(JSON.parse(f.instance.GetPointer()), {x: 3100, y: 2100});
+  f.main.sessionMode.isLocked = true;
+  assert.equal(f.instance.GetPointer(), 'null');
 });
 
 const hasGjs = fs.existsSync('/usr/bin/gjs') && fs.existsSync('/usr/bin/dbus-run-session');

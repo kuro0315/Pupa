@@ -6,6 +6,7 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 const INTERFACE = `<node>
   <interface name="jp.kuro0315.Pupa.SourceApp">
     <method name="GetSource"><arg type="s" direction="out" name="source"/></method>
+    <method name="GetPointer"><arg type="s" direction="out" name="pointer"/></method>
   </interface>
 </node>`;
 
@@ -13,6 +14,13 @@ export default class PupaSourceExtension extends Extension {
     enable() {
         this._service = Gio.DBusExportedObject.wrapJSObject(INTERFACE, this);
         this._service.export(Gio.DBus.session, '/jp/kuro0315/Pupa/SourceApp');
+    }
+
+    GetPointer() {
+        if (Main.sessionMode.isLocked)
+            return 'null';
+        const [x, y] = global.get_pointer();
+        return JSON.stringify({x, y});
     }
 
     GetSource() {
