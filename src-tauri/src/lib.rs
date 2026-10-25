@@ -1,5 +1,6 @@
 pub mod geometry;
 pub mod history;
+pub mod files;
 pub mod power;
 pub mod shortcuts;
 pub mod source_app;
@@ -791,13 +792,14 @@ mod desktop {
             state != Some(false)
         }
     }
-    fn read_clipboard(app: &AppHandle, backend: &Backend) -> Result<Option<String>, String> {
+    fn read_clipboard(app: &AppHandle, backend: &Backend) -> Result<Option<crate::files::ClipboardContent>, String> {
+        use crate::files::ClipboardContent;
         if backend.synthetic {
             return Ok(backend
                 .synthetic_clipboard
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .clone());
+                .clone().map(ClipboardContent::Text));
         }
         if !session_safe() {
             set_session_blocked(app, Some(true), None);
@@ -813,7 +815,11 @@ mod desktop {
             return Ok(None);
         }
         // No clipboard permission is granted to JS. Native results stay in Rust.
-        let result = app.clipboard().read_text();
+        #[cfg(target_os = "linux")]
+        let files = crate::files::native::read(app)?;
+        #[cfg(not(target_os = "linux"))]
+        let files: Option<Vec<String>> = None;
+        let result = if files.is_some() { Ok(String::new()) } else { app.clipboard().read_text() };
         if !session_safe() {
             set_session_blocked(app, Some(true), None);
             return Ok(None);
@@ -822,8 +828,9 @@ mod desktop {
             backend.core().lifecycle.monitor.reset_baseline();
             return Ok(None);
         }
+        if let Some(paths) = files { return Ok(Some(ClipboardContent::Files(paths))); }
         match result {
-            Ok(text) if text.len() <= MAX_TEXT_BYTES => Ok(Some(text)),
+            Ok(text) if text.len() <= MAX_TEXT_BYTES => Ok(Some(ClipboardContent::Text(text))),
             Ok(_) => Ok(None),
             Err(error) => {
                 let message = error.to_string().to_lowercase();
@@ -870,9 +877,15 @@ mod desktop {
         {
             let mut core = backend.core();
             match result {
-                Ok(text) => {
-                    if let Some(text) = core.lifecycle.monitor.complete_read(token, text) {
-                        core.history.add(text, now_ms());
+                Ok(content) => {
+                    let key = content.as_ref().map(crate::files::ClipboardContent::key);
+                    if core.lifecycle.monitor.complete_read(token, key).is_some() {
+                        let Some(content) = content else { return; };
+                        let added = match content {
+                            crate::files::ClipboardContent::Text(text) => core.history.add(text, now_ms()),
+                            crate::files::ClipboardContent::Files(paths) => core.history.add_files(paths, now_ms()),
+                        };
+                        if !added { return; }
                         backend.persist(&mut core);
                         changed = true;
                         if !backend.synthetic
@@ -1002,24 +1015,34 @@ mod desktop {
         let result = (|| -> Result<Option<String>, String> {
             authorize(&app, &window)?;
             let backend = app.state::<Backend>();
-            let (text, attempt) = {
+            let (content, attempt) = {
                 let mut core = backend.core();
-                let text = core.history.get(&id).ok_or(MISSING_ENTRY)?.text.clone();
+                let entry = core.history.get(&id).ok_or(MISSING_ENTRY)?;
+                let content = if entry.files.is_empty() { crate::files::ClipboardContent::Text(entry.text.clone()) }
+                    else { crate::files::ClipboardContent::Files(entry.files.clone()) };
                 let attempt = core
                     .copy_dismissal
                     .begin_write()
                     .ok_or("コピーしています。少し待ってお試しください。")?;
                 core.lifecycle.copying = true;
                 core.lifecycle.reconcile();
-                (text, attempt)
+                (content, attempt)
             };
-            let copied = if backend.synthetic {
+            let copied = if backend.synthetic && matches!(&content, crate::files::ClipboardContent::Files(_)) {
+                Err("Synthetic file copying is disabled outside the isolated native probe".into())
+            } else if let crate::files::ClipboardContent::Files(paths) = &content {
+                #[cfg(target_os = "linux")]
+                { crate::files::native::write(&app, paths.clone()) }
+                #[cfg(not(target_os = "linux"))]
+                { let _ = paths; Err("この OS ではファイルの再コピーにまだ対応していません。".into()) }
+            } else if backend.synthetic {
                 *backend
                     .synthetic_clipboard
                     .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(text.clone());
+                    .unwrap_or_else(|e| e.into_inner()) = Some(match &content { crate::files::ClipboardContent::Text(text) => text.clone(), _ => unreachable!() });
                 Ok(())
             } else {
+                let crate::files::ClipboardContent::Text(text) = &content else { unreachable!() };
                 app.clipboard().write_text(text.clone()).map_err(|_| {
                     "コピーできませんでした。クリップボードへのアクセスを確認してください。"
                         .to_string()
@@ -1030,7 +1053,7 @@ mod desktop {
                 core.lifecycle.copying = false;
                 core.lifecycle.reconcile();
                 if copied.is_ok() {
-                    core.lifecycle.monitor.note_copied(&text);
+                    core.lifecycle.monitor.note_copied(&content.key());
                 }
                 let visible = core.visible;
                 core.copy_dismissal
@@ -1387,6 +1410,28 @@ mod desktop {
             let _ = app.clipboard().clear();
             if read? != synthetic {
                 return Err("Native synthetic roundtrip differed".into());
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let directory = tempfile::tempdir().map_err(|_| "Cannot create synthetic files")?;
+                let file = directory.path().join("架空の資料 #1.txt");
+                let folder = directory.path().join("架空のフォルダー");
+                std::fs::write(&file, "Synthetic file clipboard content").map_err(|_| "Cannot write synthetic file")?;
+                std::fs::create_dir(&folder).map_err(|_| "Cannot create synthetic folder")?;
+                let paths = vec![file.to_string_lossy().into_owned(), folder.to_string_lossy().into_owned()];
+                crate::files::native::write(&app, paths.clone())?;
+                if crate::files::native::read(&app)? != Some(paths.clone()) {
+                    return Err("Native file URI roundtrip differed".into());
+                }
+                // Recopy must not alter the actual file or folder.
+                if std::fs::read_to_string(&file).map_err(|_| "Synthetic file disappeared")? != "Synthetic file clipboard content" || !folder.is_dir() {
+                    return Err("Native file recopy changed its source".into());
+                }
+                std::fs::remove_file(&file).map_err(|_| "Cannot remove synthetic file")?;
+                if crate::files::native::write(&app, paths).is_ok() {
+                    return Err("Native file copy accepted a deleted source".into());
+                }
+                app.clipboard().clear().map_err(|_| "Cannot clear synthetic clipboard")?;
             }
             Ok(())
         })())

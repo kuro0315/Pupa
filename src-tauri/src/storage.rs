@@ -215,6 +215,8 @@ mod tests {
         let settings = Settings {
             persistence: true,
             history_limit: 100,
+            visible_cards: 4,
+            visual_effects: "light".into(),
             ..Settings::default()
         };
         s.save_settings(&settings).unwrap();

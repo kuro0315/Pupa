@@ -1,4 +1,4 @@
-export type EntryKind = 'text' | 'link' | 'code';
+export type EntryKind = 'text' | 'link' | 'code' | 'files';
 export type EntryColor = 'mint' | 'rose' | 'lavender' | 'butter';
 export type ShortcutState = 'needs-approval' | 'requesting' | 'registered' | 'cancelled' | 'unavailable' | 'closed' | 'error';
 export interface EntrySource {
@@ -9,6 +9,7 @@ export interface EntrySource {
 export interface ClipboardEntry {
   id: string;
   text: string;
+  files?: string[];
   kind: EntryKind;
   color: EntryColor;
   createdAt: number;
@@ -18,6 +19,8 @@ export interface ClipboardEntry {
 export interface Settings {
   shortcut: string;
   historyLimit: number;
+  visibleCards?: number;
+  visualEffects?: 'auto' | 'light' | 'off';
   persistence: boolean;
   hideAfterCopy: boolean;
   sourceApp?: boolean;

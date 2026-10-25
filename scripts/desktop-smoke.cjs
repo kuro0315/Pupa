@@ -334,6 +334,8 @@ async function main() {
     if (process.env.PUPA_SMOKE_POSITION_ONLY === '1') { await positionOnlyProof(); return; }
     assert.equal((await invoke('smoke_native_clipboard_roundtrip')).ok, true, 'real isolated OS clipboard round-trip uses only its own synthetic value');
 
+    if (process.env.PUPA_SMOKE_FILE_ONLY === '1') { console.log('PASS: isolated text/file/folder clipboard roundtrip, Unicode URI decoding, reference preservation, and deleted-source rejection'); return; }
+
     await collect('小さなひらめきを、逃さない。\n今日の「いいな」を、明日のアイデアに。');
     await collect('https://github.com/kuro0315/Pupa');
     await collect("const littleThings = ['ひらめき', 'ことば', '好き'];");

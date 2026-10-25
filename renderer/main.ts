@@ -1,4 +1,5 @@
 import './style.css';
+import {createEffects, type EffectPose, type EffectsMode} from './effects';
 import { icons } from './icons';
 import { createPreviewBridge } from './preview';
 import { createTauriBridge, isTauriRuntime } from './tauri';
@@ -18,7 +19,9 @@ app.innerHTML = `
       <div class="card-deck" id="card-deck" role="list" aria-label="コピー履歴" data-testid="clipboard-list"></div>
       <div class="empty-state" id="empty-state" hidden><span id="empty-label">履歴はまだありません</span><button class="icon-button" id="empty-search" type="button" aria-label="検索をクリア" hidden>${icon('close')}</button><button class="icon-button" id="empty-settings" type="button" aria-label="設定を開く">${icon('settings')}</button></div>
     </div>
-    <section id="search-popover" class="search-popover" aria-label="履歴を検索" hidden><div class="search-line">${icon('search')}<label class="sr-only" for="search">コピー履歴を検索</label><input id="search" data-testid="search-input" type="search" autocomplete="off" spellcheck="false" placeholder="検索"><button class="icon-button" id="search-close" type="button" aria-label="検索を閉じる">${icon('close')}</button></div><div class="filters" aria-label="絞り込み"><button type="button" class="filter active" data-filter="all" aria-pressed="true">すべて</button><button type="button" class="filter" data-filter="pinned" aria-pressed="false">ピン留め</button><button type="button" class="filter" data-filter="link" aria-pressed="false">リンク</button><button type="button" class="filter" data-filter="code" aria-pressed="false">コード</button></div></section>
+    <section id="search-popover" class="search-popover" aria-label="履歴を検索" hidden><div class="search-line">${icon('search')}<label class="sr-only" for="search">コピー履歴を検索</label><input id="search" data-testid="search-input" type="search" autocomplete="off" spellcheck="false" placeholder="検索"><button class="icon-button" id="search-close" type="button" aria-label="検索を閉じる">${icon('close')}</button></div><div class="filters" aria-label="絞り込み"><button type="button" class="filter active" data-filter="all" aria-pressed="true">すべて</button><button type="button" class="filter" data-filter="pinned" aria-pressed="false">ピン留め</button><button type="button" class="filter" data-filter="link" aria-pressed="false">リンク</button><button type="button" class="filter" data-filter="code" aria-pressed="false">コード</button><button type="button" class="filter" data-filter="files" aria-pressed="false">ファイル</button></div></section>
+    <div class="deck-scroll-rail" id="deck-scroll-rail" aria-hidden="true" hidden><div id="deck-scroll-thumb"></div></div>
+    <div class="deck-position" id="deck-position" role="status" aria-live="polite" aria-atomic="true" hidden><span class="deck-direction" aria-hidden="true">↓</span><span id="deck-position-label"></span><span class="deck-boundary" id="deck-boundary"></span></div>
     <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     <div class="preview-controls" ${preview ? '' : 'hidden'}><span>UI PREVIEW · システム連携なし</span><button id="preview-replay" type="button" aria-label="カードをもう一度開く">↗</button></div>
     <button class="preview-launcher" id="preview-launcher" type="button" hidden aria-label="プレビューのカードを開く">${icon('copy')}</button>
@@ -29,6 +32,8 @@ app.innerHTML = `
       <div class="setting-group" id="system-shortcut-controls" hidden><span class="setting-label" id="system-shortcut-label">システムのショートカット</span><p class="setting-description" id="system-shortcut-status" role="status" aria-live="polite"></p><p class="setting-description" id="system-shortcut-current" hidden>現在のキー: <output id="system-shortcut-trigger"></output></p><button type="button" class="soft-button" id="system-shortcut-button" data-testid="system-shortcut-button" aria-describedby="system-shortcut-status system-shortcut-help">システムショートカットを有効にする</button><p class="field-help" id="system-shortcut-help">OSの確認画面が開きます。許可やキーの選択は、その画面で行ってください。</p><p class="form-error" id="system-shortcut-error" role="alert" hidden></p></div>
       <div class="setting-row"><div><label class="setting-label" for="history-limit">覚えておく枚数</label><p class="setting-description">ピン留めした手札も含めた上限です。</p></div><select id="history-limit" name="historyLimit"><option value="30">30 枚</option><option value="60">60 枚</option><option value="100">100 枚</option></select></div>
       <div class="history-reduction-warning" id="history-reduction-warning" hidden><p id="history-reduction-description"></p><label><input id="confirm-history-reduction" data-testid="confirm-history-reduction" type="checkbox">削除される可能性を確認しました</label></div>
+      <div class="setting-row"><div><label class="setting-label" for="visible-cards">一度に表示する枚数</label><p class="setting-description">残りのカードは矢印やスクロールで切り替えます。</p></div><select id="visible-cards" name="visibleCards"><option value="0">自動（画面に合わせる）</option>${Array.from({ length: 10 }, (_, index) => `<option value="${index + 1}">${index + 1} 枚</option>`).join('')}</select></div>
+      <div class="setting-row"><div><label class="setting-label" for="visual-effects">視覚効果</label><p class="setting-description">自動調整。待機中は描画を止め、軽さを優先します。</p></div><select id="visual-effects" name="visualEffects"><option value="auto">自動</option><option value="light">軽量</option><option value="off">オフ</option></select></div>
       <div class="setting-row fan-setting"><div class="slider-heading"><label class="setting-label" for="fan-spread">カードの開く角度</label><output id="fan-spread-value" for="fan-spread">72°</output></div><input id="fan-spread" data-testid="fan-spread-setting" type="range" min="20" max="84" step="1" value="72"><div class="slider-labels"><span>せまく</span><span>広く</span></div></div>
       <div class="setting-row fan-setting"><div class="slider-heading"><label class="setting-label" for="fan-distance">画面の端からの距離</label><output id="fan-distance-value" for="fan-distance">0 px</output></div><input id="fan-distance" data-testid="fan-distance-setting" type="range" min="0" max="90" step="1" value="0"><div class="slider-labels"><span>近く</span><span>遠く</span></div><p class="setting-description">画面に収まる範囲に調整されます。</p></div>
       <label class="setting-row toggle-row"><span><span class="setting-label">収集時のアプリを記録</span><span class="setting-description" id="source-app-description">アプリ名とローカルのアイコンのみ。ウィンドウ名やURLは記録しません。</span><span class="setting-description" id="source-app-platform-note" hidden>GNOME / Waylandでアプリ名を記録するには、Pupa Source App拡張機能の有効化が必要です。未導入・取得できない場合は「アプリ不明」になります。アイコンは端末にインストールされたアプリから取得します。</span></span><input class="switch" id="source-app" data-testid="source-app-setting" type="checkbox" name="sourceApp" aria-describedby="source-app-description source-app-platform-note"><span class="toggle-track" aria-hidden="true"></span></label>
@@ -42,6 +47,14 @@ app.innerHTML = `
 function $<T extends HTMLElement>(selector: string): T { return document.querySelector<T>(selector)!; }
 const stage = $('.fan-stage');
 const deck = $('#card-deck');
+const effects = createEffects(stage);
+let draftEffects: EffectsMode | null = null;
+let effectSelection: string | null = null;
+function effectsOff() { return (draftEffects ?? state?.settings.visualEffects) === 'off'; }
+function effectPose(region: CardRegion, expanded = false): EffectPose {
+  const scale = expanded ? region.scale : 1;
+  return { x: region.left + region.width / 2 + (expanded ? region.expandedX : 0), y: region.top + region.height / 2 + (expanded ? region.expandedY : 0), width: region.width * scale, height: region.height * scale, angle: expanded ? region.expandedAngle : region.angle };
+}
 const search = $<HTMLInputElement>('#search');
 const settingsDialog = $<HTMLDialogElement>('#settings-dialog');
 const clearDialog = $<HTMLDialogElement>('#clear-dialog');
@@ -66,17 +79,37 @@ let copyAfterimage: HTMLDivElement | null = null;
 let dismissTimer: ReturnType<typeof setTimeout> | undefined;
 let copiedId: string | null = null;
 let animateNext = true;
+let pageAnimations: Animation[] = [];
+let scrollFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
+function stopPageMotion() { pageAnimations.forEach(animation => animation.cancel()); pageAnimations = []; }
+function scrollFeedback(direction: number, boundary = '') {
+  clearTimeout(scrollFeedbackTimer);
+  stage.classList.add('is-scrolling');
+  $('.deck-direction').textContent = direction > 0 ? '↓' : '↑';
+  $('#deck-boundary').textContent = boundary;
+  scrollFeedbackTimer = setTimeout(() => { stage.classList.remove('is-scrolling'); $('#deck-boundary').textContent = ''; }, 1000);
+}
+function renderScrollPosition() {
+  const total = filteredEntries.length, visible = shownEntries.length;
+  const enabled = total > capacity();
+  $('#deck-position').hidden = !enabled; $('#deck-scroll-rail').hidden = !enabled;
+  $('#deck-position-label').textContent = enabled ? `${pageOffset + 1}–${pageOffset + visible} / ${total}` : '';
+  $('#deck-position').setAttribute('aria-label', enabled ? `全${total}枚のうち${pageOffset + 1}〜${pageOffset + visible}枚目を表示` : '');
+  const thumb = $('#deck-scroll-thumb');
+  thumb.style.height = `${total ? visible / total * 100 : 100}%`;
+  thumb.style.top = `${total ? pageOffset / total * 100 : 0}%`;
+}
 let recording = false;
 let systemShortcutRequestPending = false;
 let lastFocus: HTMLElement | null = null;
 let wheelTime = 0;
-let draftFan: { fanSpread: number; fanDistance: number } | null = null;
+let draftFan: { fanSpread: number; fanDistance: number; visibleCards: number } | null = null;
 let reductionScope = '';
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let copiedTimer: ReturnType<typeof setTimeout> | undefined;
 let previewTimer: ReturnType<typeof setTimeout> | undefined;
 let resizeTimer: ReturnType<typeof setTimeout> | undefined;
-const kindLabels = { text: 'テキスト', link: 'リンク', code: 'コード' } as const;
+const kindLabels = { text: 'テキスト', link: 'リンク', code: 'コード', files: 'ファイル' } as const;
 
 function make<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
   const element = document.createElement(tag);
@@ -99,7 +132,10 @@ function measureFanViewport() {
   const bounds = stage.getBoundingClientRect();
   return { width: bounds.width || window.innerWidth, height: bounds.height || window.innerHeight };
 }
-function capacity() { return measureFanViewport().height < 600 ? 5 : 7; }
+function capacity() {
+  const selected = draftFan?.visibleCards ?? state?.settings.visibleCards ?? 0;
+  return Number.isInteger(selected) && selected >= 1 && selected <= 10 ? selected : measureFanViewport().height < 600 ? 5 : 7;
+}
 function showToast(message: string, isError = false) {
   clearTimeout(toastTimer);
   const toast = $('#toast'); toast.replaceChildren(); addIcon(toast, isError ? 'close' : 'check'); toast.append(make('span', '', message));
@@ -116,6 +152,11 @@ async function mutate(action: () => Promise<Result>, success?: string) {
 }
 function updateExpansion() {
   const activeId = pendingDismissToken && copiedId ? copiedId : interactionMode === 'pointer' ? hoverId : keyboardId;
+  if (activeId !== effectSelection) {
+    effectSelection = activeId;
+    const region = cardRegions.find(region => region.id === activeId);
+    if (region && !copying) effects.emit('hover', [effectPose(region, true)]);
+  }
   for (const slot of deck.querySelectorAll<HTMLElement>('.card-slot')) {
     const expanded = slot.dataset.id === activeId;
     slot.classList.toggle('is-expanded', expanded);
@@ -184,8 +225,11 @@ function showCopyAfterimage(id: string) {
   ghost.style.top = `${(bounds.top + bounds.bottom) / 2 - stageBounds.top - region.height / 2}px`;
   ghost.style.transform = `rotate(${region.expandedAngle}deg) scale(${region.scale})`;
   stage.append(ghost); copyAfterimage = ghost;
+  effects.emit('copy', [{x: parseFloat(ghost.style.left) + region.width / 2, y: parseFloat(ghost.style.top) + region.height / 2, width: region.width * region.scale, height: region.height * region.scale, angle: region.expandedAngle}]);
 }
 function cancelCopyFeedback() {
+  effects.stop();
+  stopPageMotion(); clearTimeout(scrollFeedbackTimer); stage.classList.remove('is-scrolling');
   copyEpoch++; clearTimeout(dismissTimer); dismissTimer = undefined; clearCopyAfterimage();
   pendingDismissToken = null; copying = false; copiedId = null; clearTimeout(copiedTimer);
   stage.classList.remove('is-copy-dismiss', 'is-copy-dismissed');
@@ -194,21 +238,22 @@ function cancelCopyFeedback() {
 }
 async function finishCopyDismissal(token: string, epoch: number) {
   if (epoch !== copyEpoch || pendingDismissToken !== token) return;
-  clearCopyAfterimage(); stage.classList.add('is-copy-dismissed');
+  clearCopyAfterimage(); stage.classList.add('is-copy-dismissed'); effects.setVisible(false);
   try {
     const result = await bridge.completeCopyDismissal(token);
     if (epoch !== copyEpoch || pendingDismissToken !== token) return;
-    if (!result.ok) { cancelCopyFeedback(); showToast('コピーしました。ウィンドウを閉じられませんでした。', true); return; }
+    if (!result.ok) { effects.setVisible(true); cancelCopyFeedback(); showToast('コピーしました。ウィンドウを閉じられませんでした。', true); return; }
     if (preview) hidePreview(false);
     // Native hiding is token-scoped. Never issue a generic hide here: a newer
     // shown event may already refer to a different window presentation.
   } catch {
     if (epoch !== copyEpoch) return;
-    cancelCopyFeedback(); showToast('コピーしました。ウィンドウを閉じられませんでした。', true);
+    effects.setVisible(true); cancelCopyFeedback(); showToast('コピーしました。ウィンドウを閉じられませんでした。', true);
   }
 }
 async function copyEntry(entry: ClipboardEntry) {
   if (copying) return;
+  stopPageMotion(); effects.stop();
   copying = true;
   const epoch = ++copyEpoch;
   try {
@@ -220,7 +265,7 @@ async function copyEntry(entry: ClipboardEntry) {
     if (!result.dismissToken) return;
     pendingDismissToken = result.dismissToken; copiedId = entry.id; renderCards();
     if (preview) showToast('プレビュー: 実際のコピーは行いません');
-    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches || effectsOff();
     if (!reducedMotion) showCopyAfterimage(entry.id);
     stage.classList.add('is-copy-dismiss'); $('#fan-viewport').inert = true;
     const duration = reducedMotion ? 0 : 420;
@@ -237,10 +282,34 @@ function cardAction(name: keyof typeof icons, label: string, action: string, cal
   return button;
 }
 function changePage(direction: number, focus = false) {
+  if (copying) return;
   const max = Math.max(0, filteredEntries.length - capacity());
   const next = Math.max(0, Math.min(max, pageOffset + direction));
-  if (next === pageOffset) return;
-  pageOffset = next; hoverId = null; keyboardId = null; animateNext = false; renderCards();
+  if (next === pageOffset) {
+    if (max > 0) scrollFeedback(direction, direction < 0 ? '先頭' : '末尾');
+    return;
+  }
+  const poses = new Map(Array.from(deck.querySelectorAll<HTMLElement>('.card-slot')).map(slot => {
+    const bounds = slot.getBoundingClientRect();
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(slot).transform);
+    return [slot.dataset.id!, { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2,
+      angle: Math.atan2(matrix.b, matrix.a) * 180 / Math.PI }] as const;
+  }));
+  pageOffset = next; hoverId = null; keyboardId = null; pointerPressId = null; animateNext = false; renderCards();
+  scrollFeedback(direction);
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches && !effectsOff()) {
+    pageAnimations = Array.from(deck.querySelectorAll<HTMLElement>('.card-slot')).map(slot => {
+      const bounds = slot.getBoundingClientRect(), old = poses.get(slot.dataset.id!);
+      const angle = parseFloat(slot.style.getPropertyValue('--angle'));
+      const x = old ? old.x - bounds.left - bounds.width / 2 : 0;
+      const y = old ? old.y - bounds.top - bounds.height / 2 : (direction > 0 ? 48 : -48);
+      return slot.animate([
+        { transform: `translate(${x}px, ${y}px) rotate(${old?.angle ?? angle}deg) perspective(900px) rotateX(${old ? 0 : direction > 0 ? -12 : 12}deg)`, opacity: old ? 1 : .15 },
+        { transform: `translate(0, 0) rotate(${angle}deg)`, opacity: 1 },
+      ], { duration: 260, easing: 'cubic-bezier(.2,.75,.25,1)' });
+    });
+  }
+  effects.emit('page', cardRegions.map(region => effectPose(region)), direction);
   if (focus && shownEntries.length) selectCard(direction > 0 ? shownEntries.at(-1)!.id : shownEntries[0].id, true);
 }
 function fanGeometry(count: number) {
@@ -301,11 +370,12 @@ function updateHistoryWarning() {
   $('#history-reduction-description').textContent = `現在${count}件あります。${limit}件に減らすと、古い履歴（ピン留めを含む）が削除される場合があります。元に戻せません。`;
 }
 function updateFanDraft() {
-  draftFan = { fanSpread: Number($<HTMLInputElement>('#fan-spread').value), fanDistance: Number($<HTMLInputElement>('#fan-distance').value) };
+  draftFan = { visibleCards: Number($<HTMLSelectElement>('#visible-cards').value), fanSpread: Number($<HTMLInputElement>('#fan-spread').value), fanDistance: Number($<HTMLInputElement>('#fan-distance').value) };
   $('#fan-spread-value').textContent = `${draftFan.fanSpread}°`; $('#fan-distance-value').textContent = `${draftFan.fanDistance} px`; renderCards();
 }
 function renderCards() {
   if (!state) return;
+  stopPageMotion();
   const focused = document.activeElement as HTMLElement | null;
   const focusedSlot = focused?.closest<HTMLElement>('.card-slot');
   const focusedAction = focused?.dataset.action;
@@ -316,6 +386,7 @@ function renderCards() {
   filteredEntries = state.entries.filter((entry) => (filter === 'all' || (filter === 'pinned' ? entry.pinned : entry.kind === filter)) && (!query || entry.text.toLocaleLowerCase().includes(query)));
   pageOffset = Math.max(0, Math.min(pageOffset, Math.max(0, filteredEntries.length - capacity())));
   shownEntries = filteredEntries.slice(pageOffset, pageOffset + capacity());
+  renderScrollPosition();
   if (!shownEntries.some((entry) => entry.id === selectedId)) selectedId = shownEntries[0]?.id ?? null;
   if (!shownEntries.some((entry) => entry.id === hoverId)) hoverId = null;
   if (!shownEntries.some((entry) => entry.id === keyboardId)) keyboardId = null;
@@ -347,6 +418,12 @@ function renderCards() {
     const sourceLabel = make('span', 'source-label', sourceName); sourceLabel.dataset.testid = 'source-app-label';
     sourceLabel.title = source ? 'コピー検出時に最前面だったアプリです。コピー元を保証するものではありません。' : '収集時のアプリ情報はありません。';
     const content = make(entry.kind === 'code' ? 'pre' : 'p', `card-content content-${entry.kind}`, entry.text);
+    if (entry.kind === 'files') {
+      content.replaceChildren();
+      const heading = make('span', 'file-card-heading'); addIcon(heading, 'folder');
+      heading.append(make('span', '', `${entry.files?.length ?? 1} 個のファイル / フォルダー`));
+      content.append(heading, make('span', 'file-card-names', entry.text), make('span', 'file-card-note', '元の場所からコピー'));
+    }
     const time = make('time', 'card-time', timeAgo(entry.createdAt)); time.dateTime = new Date(entry.createdAt).toISOString();
     copy.append(number, sourceLabel, content, time);
     copy.addEventListener('click', () => { selectCard(entry.id); void copyEntry(entry); });
@@ -367,7 +444,8 @@ function renderCards() {
     const warning = !state!.status.shortcutRegistered || !!state!.status.storageWarning || !!state!.status.positionWarning;
     settings.classList.toggle('has-warning', warning); settings.classList.toggle('is-paused', state!.paused);
     bottomTools.append(settings, cardAction(copiedId === entry.id ? 'check' : 'copy', copiedId === entry.id ? 'コピー済み' : 'コピー', 'copy-icon', () => { void copyEntry(entry); }));
-    card.append(bottomTools); slot.append(card); deck.append(slot);
+    const depth = make('div', 'card-depth'); depth.setAttribute('aria-hidden', 'true');
+    card.append(bottomTools); slot.append(depth, card); deck.append(slot);
     slot.addEventListener('focusin', () => { interactionMode = 'keyboard'; hoverId = null; keyboardId = entry.id; selectedId = entry.id; updateExpansion(); });
     slot.addEventListener('focusout', (event) => { if (!slot.isConnected) return; if (!slot.contains(event.relatedTarget as Node | null) && keyboardId === entry.id) { keyboardId = null; updateExpansion(); } });
   });
@@ -377,6 +455,7 @@ function renderCards() {
   keyboardId = shownEntries.some((entry) => entry.id === retainedKeyboardId) ? retainedKeyboardId : null;
   hoverId = shownEntries.some((entry) => entry.id === retainedHoverId) ? retainedHoverId : null;
   if (keyboardId && focusedSlot) selectedId = keyboardId;
+  if (animateNext) effects.emit('reveal', cardRegions.map(region => effectPose(region)));
   animateNext = false; updateExpansion();
   $('#empty-state').hidden = shownEntries.length > 0;
   $('#empty-label').textContent = query || filter !== 'all' ? '見つかりませんでした' : state.paused ? '記録を一時停止中' : '履歴はまだありません';
@@ -438,6 +517,7 @@ function renderSettingsStatus() {
   if (settingsDialog.open) updateHistoryWarning();
 }
 function render() {
+  effects.setMode(draftEffects ?? state?.settings.visualEffects ?? 'auto');
   if (!state) return;
   document.querySelectorAll<HTMLButtonElement>('.filter').forEach((button) => { const active = button.dataset.filter === filter; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
   renderCards(); renderSettingsStatus();
@@ -451,6 +531,8 @@ function openSettings() {
   $('#search-popover').hidden = true;
   $<HTMLInputElement>('#shortcut-input').value = state.settings.shortcut;
   $<HTMLSelectElement>('#history-limit').value = String(state.settings.historyLimit);
+  $<HTMLSelectElement>('#visible-cards').value = String(state.settings.visibleCards ?? 0);
+  $<HTMLSelectElement>('#visual-effects').value = state.settings.visualEffects ?? 'auto';
   $<HTMLInputElement>('#persistence').checked = state.settings.persistence;
   $<HTMLInputElement>('#source-app').checked = state.settings.sourceApp !== false;
   $<HTMLInputElement>('#fan-spread').value = String(state.settings.fanSpread ?? 72);
@@ -463,9 +545,10 @@ function openSettings() {
   renderSettingsStatus(); stopRecording(); openDialog(settingsDialog);
 }
 function stopRecording() { recording = false; $('#record-shortcut').textContent = 'キーを記録'; $('#record-shortcut').classList.remove('recording'); $('#shortcut-help').textContent = '例: CommandOrControl+Shift+Space'; }
-function hidePreview(cancelPending = true) { if (!preview) return; if (cancelPending) { cancelCopyFeedback(); bridge.hide(); } clearTimeout(previewTimer); stage.classList.add('is-tucked'); $('#fan-viewport').inert = true; $('#search-popover').hidden = true; $('#preview-launcher').hidden = false; $('#preview-launcher').focus({ preventScroll: true }); }
-function hideApp() { if (preview) hidePreview(); else { cancelCopyFeedback(); bridge.hide(); } }
+function hidePreview(cancelPending = true) { if (!preview) return; effects.setVisible(false); if (cancelPending) { cancelCopyFeedback(); bridge.hide(); } clearTimeout(previewTimer); stage.classList.add('is-tucked'); $('#fan-viewport').inert = true; $('#search-popover').hidden = true; $('#preview-launcher').hidden = false; $('#preview-launcher').focus({ preventScroll: true }); }
+function hideApp() { effects.setVisible(false); if (preview) hidePreview(); else { cancelCopyFeedback(); bridge.hide(); } }
 function resetForShown() {
+  effects.setVisible(true); effectSelection = null;
   cancelCopyFeedback();
   if (settingsDialog.open) settingsDialog.close();
   if (clearDialog.open) clearDialog.close();
@@ -502,6 +585,10 @@ stage.addEventListener('pointerdown', (event) => {
 stage.addEventListener('pointerup', () => { setTimeout(() => { pointerPressId = null; }, 0); });
 stage.addEventListener('pointercancel', () => { pointerPressId = null; });
 stage.addEventListener('click', (event) => {
+  // A moving card must settle before a pointer click can copy its contents.
+  if (event.detail > 0 && pageAnimations.some(animation => animation.playState === 'running')) {
+    event.preventDefault(); event.stopImmediatePropagation(); return;
+  }
   // Keyboard activation belongs to its focused button. Pointer clicks resolve
   // through the same stable map as hover, even during the pull animation.
   const target = event.target instanceof Element ? event.target : null;
@@ -542,7 +629,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-close-dialog]').forEach((but
     // dismissal but before this event (including assistive/keyboard focus).
     const active = document.activeElement;
     const restoreFocus = active === document.body || active === stage || active === dialog || dialog.contains(active);
-    stopRecording(); if (dialog === settingsDialog) { draftFan = null; renderCards(); }
+    stopRecording(); if (dialog === settingsDialog) { draftFan = null; draftEffects = null; effects.setMode(state?.settings.visualEffects ?? 'auto'); renderCards(); }
     if (restoreFocus) (lastFocus?.isConnected && !lastFocus.closest('dialog') ? lastFocus : stage).focus({ preventScroll: true });
   });
   dialog.addEventListener('click', (event) => { if (event.target !== dialog) return; const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeDialog(dialog); });
@@ -568,6 +655,8 @@ $('#system-shortcut-button').addEventListener('click', async (event) => {
   }
 });
 $('#record-shortcut').addEventListener('click', () => { if (usesSystemShortcut()) return; if (recording) { stopRecording(); return; } recording = true; $('#record-shortcut').textContent = '記録をやめる'; $('#record-shortcut').classList.add('recording'); $('#shortcut-help').textContent = 'Ctrl / ⌘ / Alt と一緒に、使いたいキーを押してください。Escで中止。'; });
+$('#visual-effects').addEventListener('change', () => { draftEffects = $<HTMLSelectElement>('#visual-effects').value as EffectsMode; effects.setMode(draftEffects); if (draftEffects !== 'off') effects.emit('reveal', cardRegions.map(region => effectPose(region))); });
+$('#visible-cards').addEventListener('change', () => { pageOffset = 0; updateFanDraft(); });
 $('#fan-spread').addEventListener('input', updateFanDraft);
 $('#fan-distance').addEventListener('input', updateFanDraft);
 $('#history-limit').addEventListener('change', updateHistoryWarning);
@@ -576,7 +665,7 @@ $('#settings-form').addEventListener('submit', async (event) => {
   if (!$('#history-reduction-warning').hidden && !$<HTMLInputElement>('#confirm-history-reduction').checked) { $<HTMLInputElement>('#confirm-history-reduction').focus(); return; }
   const save = $<HTMLButtonElement>('#save-settings'); const error = $('#settings-error'); save.disabled = true; error.hidden = true;
   try {
-    const result = await bridge.updateSettings({ ...(!usesSystemShortcut() ? { shortcut: $<HTMLInputElement>('#shortcut-input').value.trim() } : {}), historyLimit: Number($<HTMLSelectElement>('#history-limit').value), persistence: $<HTMLInputElement>('#persistence').checked, sourceApp: $<HTMLInputElement>('#source-app').checked, fanSpread: Number($<HTMLInputElement>('#fan-spread').value), fanDistance: Number($<HTMLInputElement>('#fan-distance').value), ...(!$('#history-reduction-warning').hidden && $<HTMLInputElement>('#confirm-history-reduction').checked ? { confirmHistoryReduction: true } : {}) });
+    const result = await bridge.updateSettings({ ...(!usesSystemShortcut() ? { shortcut: $<HTMLInputElement>('#shortcut-input').value.trim() } : {}), historyLimit: Number($<HTMLSelectElement>('#history-limit').value), visibleCards: Number($<HTMLSelectElement>('#visible-cards').value), visualEffects: $<HTMLSelectElement>('#visual-effects').value as EffectsMode, persistence: $<HTMLInputElement>('#persistence').checked, sourceApp: $<HTMLInputElement>('#source-app').checked, fanSpread: Number($<HTMLInputElement>('#fan-spread').value), fanDistance: Number($<HTMLInputElement>('#fan-distance').value), ...(!$('#history-reduction-warning').hidden && $<HTMLInputElement>('#confirm-history-reduction').checked ? { confirmHistoryReduction: true } : {}) });
     if (!result.ok) { error.textContent = result.error || '設定を保存できませんでした。'; error.hidden = false; }
     else { closeDialog(settingsDialog); showToast('設定を保存しました'); }
   } catch { error.textContent = '設定を保存できませんでした。アプリとの接続を確認してください。'; error.hidden = false; }
@@ -639,7 +728,7 @@ const applyState = createStateReceiver((next) => { state = next; render(); });
 const unsubscribeState = bridge.onState(applyState);
 const unsubscribeShown = bridge.onShown(resetForShown);
 const unsubscribeSettings = bridge.onSettings?.(() => { cancelCopyFeedback(); openSettings(); }) ?? (() => {});
-window.addEventListener('pagehide', () => { viewportObserver.disconnect(); cancelCopyFeedback(); unsubscribeState(); unsubscribeShown(); unsubscribeSettings(); clearTimeout(toastTimer); clearTimeout(copiedTimer); clearTimeout(previewTimer); clearTimeout(resizeTimer); }, { once: true });
+window.addEventListener('pagehide', () => { viewportObserver.disconnect(); cancelCopyFeedback(); effects.dispose(); unsubscribeState(); unsubscribeShown(); unsubscribeSettings(); clearTimeout(toastTimer); clearTimeout(copiedTimer); clearTimeout(previewTimer); clearTimeout(resizeTimer); }, { once: true });
 void bridge.getState().then((next) => { applyState(next); stage.focus({ preventScroll: true }); }).catch(() => {
   $('#empty-state').hidden = false; $('#empty-label').textContent = '履歴を読み込めませんでした'; showToast('Pupaを再起動してください。', true);
 });

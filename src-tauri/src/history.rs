@@ -18,18 +18,25 @@ pub struct Settings {
     pub shortcut: String,
     pub system_shortcut_enabled: bool,
     pub history_limit: usize,
+    #[serde(default)]
+    pub visible_cards: usize,
+    #[serde(default = "default_visual_effects")]
+    pub visual_effects: String,
     pub persistence: bool,
     pub hide_after_copy: bool,
     pub source_app: bool,
     pub fan_spread: u32,
     pub fan_distance: u32,
 }
+fn default_visual_effects() -> String { "auto".into() }
 impl Default for Settings {
     fn default() -> Self {
         Self {
             shortcut: "CommandOrControl+Shift+Space".into(),
             system_shortcut_enabled: false,
             history_limit: 60,
+            visible_cards: 0,
+            visual_effects: default_visual_effects(),
             persistence: false,
             hide_after_copy: true,
             source_app: true,
@@ -55,6 +62,14 @@ impl Settings {
                     }
                     result.shortcut = shortcut.into();
                 }
+                "visualEffects" => match value.as_str() {
+                    Some(mode @ ("auto" | "light" | "off")) => result.visual_effects = mode.into(),
+                    _ => return Err("視覚効果は自動・軽量・オフから選んでください。".into()),
+                },
+                "visibleCards" => match value.as_u64() {
+                    Some(n @ 0..=10) => result.visible_cards = n as usize,
+                    _ => return Err("表示枚数は自動または1〜10枚から選んでください。".into()),
+                },
                 "historyLimit" => match value.as_u64() {
                     Some(n @ (30 | 60 | 100)) => result.history_limit = n as usize,
                     _ => return Err("履歴件数は 30・60・100 から選んでください。".into()),
@@ -153,6 +168,8 @@ pub fn sanitize_source(mut source: EntrySource) -> Option<EntrySource> {
 pub struct Entry {
     pub id: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
     pub kind: String,
     pub color: String,
     pub created_at: u64,
@@ -164,7 +181,7 @@ pub struct Entry {
 }
 impl Entry {
     pub fn bytes(&self) -> usize {
-        self.text.len()
+        self.text.len() + self.files.iter().map(String::len).sum::<usize>()
             + self
                 .source
                 .as_ref()
@@ -201,16 +218,24 @@ impl History {
         }
     }
     pub fn add(&mut self, text: String, now: u64) -> bool {
+        self.insert(text, Vec::new(), now)
+    }
+    pub fn add_files(&mut self, paths: Vec<String>, now: u64) -> bool {
+        let Some(paths) = crate::files::sanitize_paths(paths) else { return false; };
+        self.insert(crate::files::label(&paths), paths, now)
+    }
+    fn insert(&mut self, text: String, files: Vec<String>, now: u64) -> bool {
         if !valid_text(&text) {
             return false;
         }
         self.revision = self.revision.wrapping_add(1);
-        let mut entry = if let Some(index) = self.entries.iter().position(|e| e.text == text) {
+        let mut entry = if let Some(index) = self.entries.iter().position(|e| e.text == text && e.files == files) {
             self.entries.remove(index)
         } else {
             Entry {
                 id: Uuid::new_v4().to_string(),
-                kind: kind_of(&text),
+                kind: if files.is_empty() { kind_of(&text) } else { "files".into() },
+                files,
                 text,
                 color: COLORS[self.entries.len() % COLORS.len()].into(),
                 created_at: now,
@@ -233,16 +258,22 @@ impl History {
         let mut entries = vec![];
         let mut seen = HashSet::new();
         for value in values.iter().take(100) {
-            let Some(text) = value
-                .get("text")
-                .and_then(Value::as_str)
-                .filter(|s| valid_text(s))
-            else {
-                continue;
+            let files = match value.get("files") {
+                Some(Value::Array(values)) if !values.is_empty() => {
+                    let Some(paths) = values.iter().map(|v| v.as_str().map(str::to_owned)).collect::<Option<Vec<_>>>()
+                        .and_then(crate::files::sanitize_paths) else { continue; };
+                    paths
+                },
+                None | Some(Value::Array(_)) if value.get("kind").and_then(Value::as_str) != Some("files") => Vec::new(),
+                _ => continue,
             };
-            if !seen.insert(digest(text)) {
-                continue;
-            }
+            let text = if files.is_empty() {
+                let Some(text) = value.get("text").and_then(Value::as_str).filter(|s| valid_text(s)) else { continue; };
+                text.to_owned()
+            } else { crate::files::label(&files) };
+            let key = if files.is_empty() { crate::files::ClipboardContent::Text(text.clone()).key() }
+                else { crate::files::ClipboardContent::Files(files.clone()).key() };
+            if !seen.insert(key) { continue; }
             self.revision = self.revision.wrapping_add(1);
             let color = value
                 .get("color")
@@ -255,8 +286,9 @@ impl History {
                 .and_then(sanitize_source);
             entries.push(Entry {
                 id: Uuid::new_v4().to_string(),
-                text: text.into(),
-                kind: kind_of(text),
+                kind: if files.is_empty() { kind_of(&text) } else { "files".into() },
+                files,
+                text,
                 color: color.into(),
                 created_at: value
                     .get("createdAt")
@@ -467,6 +499,46 @@ impl CopyDismissal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn file_groups_keep_identity_and_do_not_collide_with_text() {
+        let root = std::env::temp_dir();
+        let paths = vec![root.join("架空の資料.txt").to_string_lossy().into_owned(),
+            root.join("架空のフォルダー").to_string_lossy().into_owned()];
+        let mut history = History::new(60);
+        assert!(history.add_files(paths.clone(), 1));
+        let id = history.entries[0].id.clone();
+        history.toggle_pin(&id);
+        assert!(history.add_files(paths.clone(), 2));
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(history.entries[0].id, id);
+        assert!(history.entries[0].pinned);
+        assert_eq!(history.entries[0].kind, "files");
+        assert!(history.entries[0].bytes() > history.entries[0].text.len());
+        assert!(history.add(crate::files::label(&paths), 3));
+        assert_eq!(history.entries.len(), 2);
+        let saved = serde_json::to_value(&history.entries).unwrap();
+        let mut restored = History::new(60);
+        restored.restore(&saved, 4);
+        assert_eq!(restored.entries.len(), 2);
+        assert_eq!(restored.entries[1].files, paths);
+        assert_eq!(restored.entries[1].kind, "files");
+        assert!(restored.entries[1].pinned);
+    }
+
+    #[test]
+    fn file_restore_rejects_invalid_paths_and_rebuilds_display_names() {
+        let path = std::env::temp_dir().join("本当の名前.txt").to_string_lossy().into_owned();
+        let mut history = History::new(60);
+        history.restore(&serde_json::json!([
+            {"kind":"files","text":"forged","files":[path]},
+            {"kind":"files","text":"missing paths"},
+            {"kind":"files","text":"relative","files":["relative.txt"]},
+            {"kind":"files","text":"bad array","files":[123]},
+            {"kind":"files","text":"bad schema","files":"/tmp/example"}
+        ]), 1);
+        assert_eq!(history.entries.len(), 1);
+        assert_eq!(history.entries[0].text, "本当の名前.txt");
+    }
     use serde_json::json;
     fn read(m: &mut ClipboardMonitor, text: Option<&str>) -> Option<String> {
         let token = m.begin_read()?;
@@ -638,6 +710,11 @@ mod tests {
         let s = Settings::default();
         assert!(!s.persistence);
         assert_eq!(s.history_limit, 60);
+        assert_eq!(s.visible_cards, 0);
+        assert_eq!(s.visual_effects, "auto");
+        assert_eq!(s.patched(&json!({"visualEffects":"light"})).unwrap().visual_effects, "light");
+        assert_eq!(s.patched(&json!({"visualEffects":"off"})).unwrap().visual_effects, "off");
+        assert_eq!(s.patched(&json!({"visibleCards":10})).unwrap().visible_cards, 10);
         for patch in [
             json!(null),
             json!([]),
@@ -647,6 +724,12 @@ mod tests {
             json!({"sourceApp":1}),
             json!({"fanSpread":30.5}),
             json!({"fanDistance":91}),
+            json!({"visibleCards":11}),
+            json!({"visibleCards":-1}),
+            json!({"visibleCards":2.5}),
+            json!({"visibleCards":"3"}),
+            json!({"visualEffects":"ultra"}),
+            json!({"visualEffects":true}),
         ] {
             assert!(s.patched(&patch).is_err(), "{patch}");
         }

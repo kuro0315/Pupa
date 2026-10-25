@@ -4,6 +4,99 @@ const setRange = async (page: import('@playwright/test').Page, id: string, value
 const cards = (page: import('@playwright/test').Page) => page.getByTestId('clipboard-card');
 const openSettings = async (page: import('@playwright/test').Page) => { await page.keyboard.press(','); await expect(page.getByTestId('settings-dialog')).toBeVisible(); };
 
+test('paging visibly moves retained cards, updates position, and signals the history boundary', async ({page}) => {
+  await installHandFixture(page, 12); await page.goto('/'); await expect(cards(page)).toHaveCount(7);
+  await expect(page.locator('#deck-position-label')).toHaveText('1–7 / 12');
+  const before = await page.locator('#deck-scroll-thumb').getAttribute('style');
+  await page.keyboard.press('PageDown');
+  await expect(page.locator('#deck-position-label')).toHaveText('6–12 / 12');
+  await expect(page.locator('.fan-stage')).toHaveClass(/is-scrolling/);
+  expect(await page.locator('#deck-scroll-thumb').getAttribute('style')).not.toBe(before);
+  expect(await cards(page).evaluateAll(elements => elements.some(element => element.getAnimations().some(a => a.playState === 'running')))).toBeTruthy();
+  await page.keyboard.press('PageDown'); await expect(page.locator('#deck-boundary')).toHaveText('末尾');
+  await page.keyboard.press('PageUp'); await expect(page.locator('#deck-position-label')).toHaveText('1–7 / 12');
+  await page.keyboard.press('PageUp'); await expect(page.locator('#deck-boundary')).toHaveText('先頭');
+  expect(await page.evaluate(() => (window as any).handCopies)).toEqual([]);
+});
+
+test('wheel paging reports its position with reduced motion and disappears when history fits', async ({page}) => {
+  await page.emulateMedia({reducedMotion: 'reduce'});
+  await installHandFixture(page, 12); await page.goto('/'); await expect(cards(page)).toHaveCount(7);
+  await cards(page).first().dispatchEvent('wheel', {deltaY: 100, bubbles: true});
+  await expect(page.locator('#deck-position-label')).toHaveText('2–8 / 12');
+  expect(await cards(page).evaluateAll(elements => elements.every(element => element.getAnimations().length === 0))).toBeTruthy();
+  await page.keyboard.press('Control+f'); await page.getByTestId('search-input').fill('HAND 01');
+  await expect(cards(page)).toHaveCount(1); await expect(page.locator('#deck-position')).toBeHidden();
+  await expect(page.locator('#deck-scroll-rail')).toBeHidden();
+});
+
+test('moving cards ignore pointer copies while keyboard copy remains immediate', async ({page}) => {
+  await installHandFixture(page, 12); await page.goto('/'); await expect(cards(page)).toHaveCount(7);
+  await page.keyboard.press('PageDown');
+  await page.getByTestId('copy-entry').first().dispatchEvent('click', {detail: 1, button: 0, bubbles: true});
+  expect(await page.evaluate(() => (window as any).handCopies)).toEqual([]);
+  await page.keyboard.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).handCopies.length)).toBe(1);
+});
+
+test('visible card count previews, cancels, persists and preserves access to hidden history', async ({page}) => {
+  await page.goto('/'); await expect(cards(page)).toHaveCount(5);
+  await openSettings(page);
+  await expect(page.locator('#visible-cards')).toHaveValue('0');
+  await page.locator('#visible-cards').selectOption('3'); await expect(cards(page)).toHaveCount(3);
+  await page.getByRole('button', {name: 'キャンセル', exact: true}).click(); await expect(cards(page)).toHaveCount(5);
+  await openSettings(page); await page.locator('#visible-cards').selectOption('2');
+  await page.locator('#save-settings').click(); await expect(cards(page)).toHaveCount(2);
+  const first = await cards(page).first().getAttribute('data-id');
+  await page.keyboard.press('PageDown'); await expect(cards(page)).toHaveCount(2);
+  expect(await cards(page).first().getAttribute('data-id')).not.toBe(first);
+  await openSettings(page); await expect(page.locator('#visible-cards')).toHaveValue('2');
+  await page.locator('#visible-cards').selectOption('0'); await page.locator('#save-settings').click();
+  await expect(cards(page)).toHaveCount(5);
+});
+
+test('ten configured cards fit a small viewport and remain keyboard selectable', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 480});
+  await page.addInitScript(() => {
+    const state = {entries: Array.from({length: 12}, (_, i) => ({id: `count-${i}`, text: `Synthetic card ${i + 1}`, kind: 'text', color: 'mint', createdAt: Date.now(), pinned: false})),
+      settings: {shortcut: 'CommandOrControl+Shift+Space', historyLimit: 60, persistence: false, visibleCards: 10}, paused: false,
+      status: {shortcutRegistered: true, platform: 'linux', wayland: false, version: 'visible-count-test'}};
+    (window as any).pupa = {getState: async () => state, onState: () => () => {}, onShown: () => () => {}, hide() {}, quit() {}};
+  });
+  await page.emulateMedia({reducedMotion: 'reduce'}); await page.goto('/');
+  await expect(cards(page)).toHaveCount(10);
+  expect(await cards(page).evaluateAll(elements => elements.every(element => {
+    const r = element.getBoundingClientRect(); return r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
+  }))).toBeTruthy();
+  for (let i = 0; i < 11; i++) await page.keyboard.press('ArrowDown');
+  await expect(page.locator('.card-slot.is-expanded')).toHaveAttribute('data-id', 'count-10');
+});
+
+test('file cards show filenames and counts, filter by type, and report missing originals', async ({page}) => {
+  await page.addInitScript(() => {
+    const state = {entries: [
+      {id: 'file-group', text: '架空の資料 #1.pdf\n<架空フォルダー>', files: ['/tmp/架空の資料 #1.pdf', '/tmp/<架空フォルダー>'],
+        kind: 'files', color: 'mint', createdAt: Date.now(), pinned: false},
+      {id: 'plain-text', text: 'Synthetic plain text', kind: 'text', color: 'butter', createdAt: Date.now(), pinned: false},
+    ], settings: {shortcut: 'CommandOrControl+Shift+Space', historyLimit: 60, persistence: false}, paused: false,
+      status: {shortcutRegistered: true, platform: 'linux', wayland: false, version: 'files-test'}};
+    (window as any).fileCopies = [];
+    (window as any).pupa = {getState: async () => state, onState: () => () => {}, onShown: () => () => {}, hide() {}, quit() {},
+      copyEntry: async (id: string) => { (window as any).fileCopies.push(id); return {ok: false, error: '元のファイルが見つかりません。'}; }};
+  });
+  await page.goto('/'); await expect(cards(page)).toHaveCount(2);
+  await expect(page.locator('.file-card-heading')).toContainText('2 個');
+  await expect(page.locator('.file-card-names')).toHaveText('架空の資料 #1.pdf\n<架空フォルダー>');
+  await expect(page.locator('.file-card-note')).toHaveText('元の場所からコピー');
+  await page.keyboard.press('Control+f'); await page.locator('[data-filter="files"]').click();
+  await expect(cards(page)).toHaveCount(1);
+  await page.getByTestId('search-input').fill('資料 #1'); await expect(cards(page)).toHaveCount(1);
+  await page.keyboard.press('Escape'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+  await expect(page.locator('#toast')).toContainText('元のファイルが見つかりません');
+  expect(await page.evaluate(() => (window as any).fileCopies)).toEqual(['file-group']);
+  await expect(page.locator('.fan-stage')).not.toHaveClass(/is-copy-dismiss/);
+});
+
 test('capture cards-only fan, enlarged card, and entrance animation', async ({ browser }) => {
   fs.mkdirSync('artifacts', { recursive: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, recordVideo: { dir: 'artifacts', size: { width: 1440, height: 1000 } } });
